@@ -18,10 +18,29 @@
 
     <div class="hud-top">
 
-      <!-- Left: Shards -->
-      <div class="hud-shards" id="hud-shards">
-        <span class="hud-shards-icon" aria-hidden="true">◆</span>
-        <span class="hud-shards-value" id="hud-shards-value">0</span>
+      <!-- Left: Shards + Progress + Health -->
+      <div class="hud-left">
+        <div class="hud-shards" id="hud-shards">
+          <div class="hud-shards-main">
+            <span class="hud-shards-icon" aria-hidden="true">◆</span>
+            <span class="hud-shards-value" id="hud-shards-value">0</span>
+          </div>
+
+          <!-- NEW: progress to win -->
+          <div class="hud-progress">
+            <div class="hud-progress-top">
+              <span id="hud-progress-label" class="hud-progress-label">0 / 0</span>
+              <span id="hud-progress-remaining" class="hud-progress-remaining">+0 to win</span>
+            </div>
+            <div class="hud-progress-bar">
+              <div id="hud-progress-fill" class="hud-progress-fill" style="width:0%"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hud-health hidden" id="hud-health" aria-label="Health">
+          <span class="hud-health-value" id="hud-health-value">100</span>
+        </div>
       </div>
 
       <!-- Center: Round -->

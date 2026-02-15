@@ -170,13 +170,15 @@ export class ShardSystem {
 
       for (const state of this.pickups.values()) {
         if (state.collected) continue;
+        // Use entity position when available (model entities can have different pivot than spawn pos)
+        const pickupPos = state.entity?.position ?? state.pos;
         if (
-          Math.abs(playerPos.x - state.pos.x) > scanRadius ||
-          Math.abs(playerPos.y - state.pos.y) > scanRadius ||
-          Math.abs(playerPos.z - state.pos.z) > scanRadius
+          Math.abs(playerPos.x - pickupPos.x) > scanRadius ||
+          Math.abs(playerPos.y - pickupPos.y) > scanRadius ||
+          Math.abs(playerPos.z - pickupPos.z) > scanRadius
         )
           continue;
-        if (sqDist(playerPos, state.pos) > pickupRadiusSq) continue;
+        if (sqDist(playerPos, pickupPos) > pickupRadiusSq) continue;
 
         state.collected = true;
         if (state.entity) state.entity.despawn();

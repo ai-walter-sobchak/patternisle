@@ -1,24 +1,24 @@
 /**
  * HYTOPIA SDK Boilerplate
- * 
+ *
  * This is a simple boilerplate to get started on your project.
  * It implements the bare minimum to be able to run and connect
  * to your game server and run around as the basic player entity.
- * 
+ *
  * From here you can begin to implement your own game logic
  * or do whatever you want!
- * 
+ *
  * You can find documentation here: https://github.com/hytopiagg/sdk/blob/main/docs/server.md
- * 
+ *
  * For more in-depth examples, check out the examples folder in the SDK, or you
  * can find it directly on GitHub: https://github.com/hytopiagg/sdk/tree/main/examples/payload-game
- * 
+ *
  * You can officially report bugs or request features here: https://github.com/hytopiagg/sdk/issues
- * 
+ *
  * To get help, have found a bug, or want to chat with
  * other HYTOPIA devs, join our Discord server:
  * https://discord.gg/DXCXJbHSJX
- * 
+ *
  * Official SDK Github repo: https://github.com/hytopiagg/sdk
  * Official SDK NPM Package: https://www.npmjs.com/package/hytopia
  */
@@ -28,6 +28,7 @@ import {
   Audio,
   DefaultPlayerEntity,
   PlayerEvent,
+  PlayerManager,
   PlayerUIEvent,
   WorldLoopEvent,
 } from 'hytopia';
@@ -76,8 +77,10 @@ function logMapBounds(map: any) {
 }
 
 logMapBounds(worldMap);
+
 import { HudService } from './src/server/services/HudService.js';
 import { ScoreService } from './src/server/services/ScoreService.js';
+import { CombatService } from './src/server/services/CombatService.js';
 import { ShardSystem } from './src/server/systems/ShardSystem.js';
 import { ObjectiveSystem } from './src/server/systems/ObjectiveSystem.js';
 import { SpawnSystem } from './src/server/systems/SpawnSystem.js';
@@ -92,7 +95,7 @@ import {
  * setup necessary for our game. The init function is
  * passed a World instance which is the default
  * world created by the game server on startup.
- * 
+ *
  * Documentation: https://github.com/hytopiagg/sdk/blob/main/docs/server.startserver.md
  */
 
@@ -105,25 +108,8 @@ startServer(async world => {
 
   const DEV_MODE = false; // Set true to allow /setmatch while players are connected.
 
-  /**
-   * Enable debug rendering of the physics simulation.
-   * This will overlay lines in-game representing colliders,
-   * rigid bodies, and raycasts. This is useful for debugging
-   * physics-related issues in a development environment.
-   * Enabling this can cause performance issues, which will
-   * be noticed as dropped frame rates and higher RTT times.
-   * It is intended for development environments only and
-   * debugging physics.
-   */
-  
   // world.simulation.enableDebugRendering(true);
 
-  /**
-   * Load our map.
-   * You can build your own map using https://build.hytopia.com
-   * After building, hit export and drop the .json file in
-   * the assets folder as map.json.
-   */
   console.log('[map] json keys:', Object.keys(worldMap || {}));
   console.log('[map] json size:', JSON.stringify(worldMap || {}).length);
 
@@ -159,8 +145,69 @@ startServer(async world => {
     hud,
     scoreService
   );
+  const combatService = new CombatService(
+    world,
+    worldState,
+    roundController,
+    hud,
+    scoreService
+  );
+
   shardSystem.generateAndSpawnPickups(worldState.seed);
   // Match starts on first player join when status is LOBBY (see JOINED_WORLD).
+
+  // =========================================================
+  // Shared handler for JOIN + RECONNECT (keeps logic in sync)
+  // =========================================================
+  function handlePlayerEnteredWorld(
+    player: any,
+    opts?: { allowStartMatch?: boolean; resetShardsOnEnter?: boolean }
+  ) {
+    const allowStartMatch = opts?.allowStartMatch !== false;
+    const resetShardsOnEnter = opts?.resetShardsOnEnter !== false;
+
+    // Always ensure score entry so joiners (including late) appear on leaderboard
+    scoreService.ensurePlayer(player.id, player.name ?? player.id);
+
+    const status = worldState.roundState.status;
+
+    // Only JOIN is allowed to auto-start (avoid reconnect accidentally starting a match)
+    if (allowStartMatch && status === 'LOBBY') {
+      // Optional anti-double-start latch.
+      const rs: any = worldState.roundState as any;
+      if (rs.isStarting) return;
+      rs.isStarting = true;
+
+      roundController.startMatch();
+      return;
+    }
+
+    // RUNNING or RESETTING: mid-match enter — init combat, (optional) reset shards, spawn, sync HUD
+    if (status === 'RUNNING' || status === 'RESETTING') {
+      const ps = worldState.getPlayer(player.id);
+      if (ps) {
+        ps.health = 100;
+        ps.controlsLockedUntilMs = undefined;
+        ps.isEliminatedUntilMs = undefined;
+        ps.lastAttackAtMs = undefined;
+        ps.invulnerableUntilMs = Date.now() + 1500;
+      }
+
+      if (resetShardsOnEnter) {
+        worldState.resetPlayerShards(player.id);
+      }
+
+      roundController.respawnPlayer(player);
+      hud.sendHud(player);
+      hud.broadcastHud();
+      return;
+    }
+
+    // Fallback: at least keep their HUD synced
+    hud.sendHud(player);
+  }
+
+  // =========================================================
 
   world.loop.on(WorldLoopEvent.TICK_START, ({ tickDeltaMs }) => {
     shardSystem.tick(tickDeltaMs);
@@ -168,22 +215,34 @@ startServer(async world => {
   });
 
   const OBJECTIVE_RESPAWN_INTERVAL_MS = 250;
+  const FALL_RECOVERY_COOLDOWN_MS = 2000;
+  const VOID_Y = -20;
+
   setInterval(() => {
     objectiveSystem.tickRespawn();
     roundController.tickMatchLifecycle();
+
+    // Fall recovery: respawn players who fell off the island (y < -20), with per-player cooldown
+    const now = Date.now();
+    const connected = PlayerManager.instance.getConnectedPlayersByWorld(world);
+    for (const player of connected) {
+      const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
+      const entity = entities[0];
+      if (!entity?.isSpawned || entity.position.y >= VOID_Y) continue;
+      const ps = worldState.getPlayer(player.id);
+      if (ps?.lastFallRecoveryAtMs != null && now - ps.lastFallRecoveryAtMs < FALL_RECOVERY_COOLDOWN_MS)
+        continue;
+      roundController.respawnPlayer(player);
+      combatService.resetHealth(player.id);
+      if (ps) ps.invulnerableUntilMs = Date.now() + 1500;
+      hud.sendHud(player);
+      hud.toast(player, 'info', 'Recovered');
+      if (ps) ps.lastFallRecoveryAtMs = now;
+    }
   }, OBJECTIVE_RESPAWN_INTERVAL_MS);
 
   /**
-   * Handle player joining the game. The PlayerEvent.JOINED_WORLD
-   * event is emitted to the world when a new player connects to
-   * the game. From here, we create a basic player
-   * entity instance which automatically handles mapping
-   * their inputs to control their in-game entity and
-   * internally uses our player entity controller.
-   * 
-   * The HYTOPIA SDK is heavily driven by events, you
-   * can find documentation on how the event system works,
-   * here: https://dev.hytopia.com/sdk-guides/events
+   * Handle player joining the game.
    */
   world.on(PlayerEvent.JOINED_WORLD, ({ player }) => {
     worldState.registerPlayer(player.id);
@@ -200,16 +259,8 @@ startServer(async world => {
     player.ui.load('ui/index.html');
     player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
 
-    const playerName =
-      player && 'name' in player && typeof (player as { name?: string }).name === 'string'
-        ? (player as { name: string }).name
-        : player.id;
-    scoreService.ensurePlayer(player.id, playerName);
-    if (worldState.roundState.status === 'LOBBY') {
-      roundController.startMatch();
-    } else {
-      hud.sendHud(player);
-    }
+    // JOIN: allow start; reset shards for fairness on late-join
+    handlePlayerEnteredWorld(player, { allowStartMatch: true, resetShardsOnEnter: true });
 
     hud.toast(player, 'info', 'Connected');
     hud.sendRoundSplashToPlayer(player);
@@ -225,19 +276,7 @@ startServer(async world => {
   });
 
   /**
-   * Handle player leaving the game. The PlayerEvent.LEFT_WORLD
-   * event is emitted to the world when a player leaves the game.
-   * Because HYTOPIA is not opinionated on join and
-   * leave game logic, we are responsible for cleaning
-   * up the player and any entities associated with them
-   * after they leave. We can easily do this by 
-   * getting all the known PlayerEntity instances for
-   * the player who left by using our world's EntityManager
-   * instance.
-   * 
-   * The HYTOPIA SDK is heavily driven by events, you
-   * can find documentation on how the event system works,
-   * here: https://dev.hytopia.com/sdk-guides/events
+   * Handle player leaving the game.
    */
   world.on(PlayerEvent.LEFT_WORLD, ({ player }) => {
     worldState.disconnectPlayer(player.id);
@@ -245,23 +284,19 @@ startServer(async world => {
   });
 
   /**
-   * If a player's connection drops, or they quickly leave and reconnect to the same game,
-   * it's considered a reconnect event and not a new join event, so we need to handle
-   * that appropriately. In this case, we just need to reload the player's UI. If we had
-   * UI data to sync too, we'd want to resync that as well here. RECONNECTED_WORLD is a special
-   * event where the player is still in the world (the disconnect timer hasn't happened yet),
-   * so the server hasn't closed their connection and therefore did not trigger LEFT_WORLD.
+   * Handle player reconnecting (UI reload + resync).
    */
   world.on(PlayerEvent.RECONNECTED_WORLD, ({ player }) => {
     // Reload the player's UI to ensure it's up to date.
     player.ui.load('ui/index.html');
     player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
-    hud.sendHud(player);
+
+    // RECONNECT: do NOT start match; do NOT reset shards
+    handlePlayerEnteredWorld(player, { allowStartMatch: false, resetShardsOnEnter: false });
   });
 
   /**
-   * A silly little easter egg command. When a player types
-   * "/rocket" in the game, they'll get launched into the air!
+   * A silly little easter egg command.
    */
   world.chatManager.registerCommand('/rocket', player => {
     world.entityManager.getPlayerEntitiesByPlayer(player).forEach(entity => {
@@ -358,6 +393,15 @@ startServer(async world => {
     world.chatManager.sendPlayerMessage(player, 'Round force-started.');
   });
 
+  world.chatManager.registerCommand('/start', (player) => {
+    if (!DEV_MODE) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: /start is DEV_MODE only.');
+      return;
+    }
+    roundController.forceStart();
+    world.chatManager.sendPlayerMessage(player, 'Round started.');
+  });
+
   world.chatManager.registerCommand('/spawnshards', player => {
     if (!DEV_MODE) {
       world.chatManager.sendPlayerMessage(player, 'Refused: /spawnshards is DEV_MODE only.');
@@ -385,11 +429,77 @@ startServer(async world => {
     );
   });
 
+  const MELEE_RANGE = 3.0;
+  const MELEE_COOLDOWN_MS = 500;
+  const MELEE_DAMAGE = 34;
+
+  world.chatManager.registerCommand('/hit', (player, args) => {
+    const targetQuery = args[0]?.trim();
+    if (!targetQuery) {
+      world.chatManager.sendPlayerMessage(player, 'Usage: /hit <targetNameOrId>');
+      return;
+    }
+    if (worldState.roundState.status !== 'RUNNING') {
+      world.chatManager.sendPlayerMessage(player, 'Round resetting...');
+      return;
+    }
+    const attackerId = player.id;
+    const attackerState = worldState.getPlayer(attackerId);
+    if (!attackerState) {
+      world.chatManager.sendPlayerMessage(player, 'Not registered.');
+      return;
+    }
+    const now = Date.now();
+    if ((attackerState.lastAttackAtMs ?? 0) + MELEE_COOLDOWN_MS > now) {
+      world.chatManager.sendPlayerMessage(player, 'Melee on cooldown.');
+      return;
+    }
+    const attackerEntities = world.entityManager.getPlayerEntitiesByPlayer(player);
+    const attackerEntity = attackerEntities[0];
+    if (!attackerEntity?.isSpawned) {
+      world.chatManager.sendPlayerMessage(player, 'Not spawned.');
+      return;
+    }
+    const attackerPos = attackerEntity.position;
+    const connected = roundController.getConnectedPlayers();
+    const q = targetQuery.toLowerCase();
+    const candidates = connected.filter(
+      (c) =>
+        c.id !== attackerId &&
+        (c.id.toLowerCase().includes(q) || (c.name && String(c.name).toLowerCase().includes(q)))
+    );
+    if (candidates.length === 0) {
+      world.chatManager.sendPlayerMessage(player, 'No matching player.');
+      return;
+    }
+    let closest: { id: string; dist: number; entity?: unknown } | null = null;
+    for (const c of candidates) {
+      const entity = c.entity as { position?: { x: number; y: number; z: number } } | undefined;
+      const pos = entity?.position;
+      if (!pos) continue;
+      const dx = pos.x - attackerPos.x;
+      const dy = pos.y - attackerPos.y;
+      const dz = pos.z - attackerPos.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist <= MELEE_RANGE && (closest == null || dist < closest.dist)) {
+        closest = { id: c.id, dist, entity: c.entity };
+      }
+    }
+    if (closest == null) {
+      world.chatManager.sendPlayerMessage(
+        player,
+        `No player within ${MELEE_RANGE}m. Use /where to check position.`
+      );
+      return;
+    }
+    attackerState.lastAttackAtMs = now;
+    combatService.damage(closest.id, attackerId, MELEE_DAMAGE, 'melee');
+    world.chatManager.sendPlayerMessage(player, 'Hit!', '00FF00');
+  });
+
   /**
-   * Play some peaceful ambient music to
-   * set the mood!
+   * Play some peaceful ambient music to set the mood!
    */
-  
   new Audio({
     uri: 'audio/music/hytopia-main-theme.mp3',
     loop: true,

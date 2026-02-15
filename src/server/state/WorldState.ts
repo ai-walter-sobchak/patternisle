@@ -92,6 +92,7 @@ export class WorldState {
           hybridsCreated: 0,
         },
         connected: true,
+        health: 100,
       };
       this.players.set(playerId, state);
     } else {
@@ -115,5 +116,12 @@ export class WorldState {
     for (const p of this.players.values()) {
       p.shards = 0;
     }
+  }
+
+  /** Set a single player's shard balance to 0 (e.g. late-join). */
+  resetPlayerShards(playerId: string): void {
+    const ps = this.getPlayer(playerId);
+    if (!ps) return;
+    ps.shards = 0;
   }
 }

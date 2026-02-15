@@ -17,7 +17,6 @@ import {
 import { TARGET_SHARDS } from '../constants.js';
 
 export interface HudExtras {
-  shards?: number;
   winnerName?: string;
   resetEndsAtMs?: number;
 }
@@ -28,11 +27,18 @@ export class HudService {
     private readonly worldState: WorldState
   ) {}
 
-  /** Send current HUD state to one player. Uses server state; extras override for that payload only. */
+  /**
+   * Send current HUD state to one player.
+   * Server-authoritative: derives values from worldState only.
+   * Extras are allowed only for non-gameplay display fields (winnerName/reset timer).
+   */
   sendHud(player: Player, extras?: HudExtras): void {
     const r = this.worldState.roundState;
     const p = this.worldState.getPlayer(player.id);
-    const shards = extras?.shards ?? p?.shards ?? 0;
+
+    // Single source of truth
+    const shards = p?.shards ?? 0;
+    const health = p != null ? (p.health ?? 100) : undefined;
 
     const msg: HudMessage = {
       v: HUD_MESSAGE_VERSION,
@@ -45,6 +51,7 @@ export class HudService {
       matchEndsAtMs: r.matchEndsAtMs,
       resetEndsAtMs: r.resetEndsAtMs ?? extras?.resetEndsAtMs,
     };
+    if (health !== undefined) msg.health = health;
 
     if (r.winnerPlayerId != null) {
       // Winner display name from score store if present, else live player display name, else id.
@@ -60,7 +67,7 @@ export class HudService {
       msg.objective = this.objectiveToPayload(obj);
     }
 
-    // Leaderboard based on current shards (matches the HUD shards counter)
+    // Leaderboard based on current round shards (same source as msg.shards)
     const leaderboard = this.getLeaderboard();
     if (leaderboard.length > 0) {
       msg.scores = leaderboard;
@@ -70,8 +77,8 @@ export class HudService {
   }
 
   /**
-   * Leaderboard from live player shards (authoritative for current round),
-   * sorted by score desc, then name asc.
+   * Leaderboard derived from WorldState player shards.
+   * Sorted by shards desc, then name asc.
    *
    * NOTE: score === shards for now.
    */
@@ -109,10 +116,7 @@ export class HudService {
   broadcastHud(extras?: HudExtras): void {
     const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     for (const player of players) {
-      const p = this.worldState.getPlayer(player.id);
-      const playerExtras: HudExtras | undefined =
-        extras ?? (p != null ? { shards: p.shards } : undefined);
-      this.sendHud(player, playerExtras);
+      this.sendHud(player, extras);
     }
   }
 

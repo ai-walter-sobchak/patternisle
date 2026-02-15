@@ -39,6 +39,8 @@ export interface HudMessage {
   objective?: HudObjectivePayload;
   /** Leaderboard (sorted by score desc, name asc). */
   scores?: HudScoreEntry[];
+  /** Local player health (sent only to that player). */
+  health?: number;
 }
 
 export interface ToastMessage {

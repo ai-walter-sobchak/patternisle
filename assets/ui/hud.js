@@ -1,8 +1,8 @@
 /**
- * HUD state and rendering. Server-authoritative: state comes from hytopia.onData (type: hud, toast, feed, roundSplash).
- * Schema v1: { type:'hud', shards, roundId, status, target, winnerName?, resetEndsAtMs? } etc.
- * Settings (scale, reduce motion, mute UI sounds) persisted in localStorage.
+ * HUD state and rendering. Server-authoritative.
+ * Schema v1: { type:'hud', shards, roundId, status, target, winnerName?, resetEndsAtMs?, scores?, health? }
  */
+
 (function () {
   const state = {
     shards: 0,
@@ -14,8 +14,8 @@
     resetEndsAtMs: null,
     feed: [],
     toasts: [],
-    splashText: null,
-    scores: []
+    scores: [],
+    health: null
   };
 
   const FEED_MAX = 6;
@@ -24,12 +24,14 @@
   const STREAK_WINDOW_MS = 2000;
   const HUD_SETTINGS_KEY = 'patternisle-hud-settings';
 
-  let timerTickIntervalId = null;
   let root = null;
   let lastPickupTime = 0;
   let streakCount = 0;
 
-  /** Default and persisted HUD settings. */
+  // =========================================================
+  // SETTINGS
+  // =========================================================
+
   function getSettings() {
     try {
       const raw = localStorage.getItem(HUD_SETTINGS_KEY);
@@ -41,14 +43,14 @@
           muteUiSounds: Boolean(parsed.muteUiSounds)
         };
       }
-    } catch (_) { /* ignore */ }
+    } catch (_) {}
     return { scale: 1, reduceMotion: false, muteUiSounds: false };
   }
 
   function saveSettings(settings) {
     try {
       localStorage.setItem(HUD_SETTINGS_KEY, JSON.stringify(settings));
-    } catch (_) { /* ignore */ }
+    } catch (_) {}
   }
 
   function applySettings(settings) {
@@ -59,107 +61,170 @@
     root.classList.toggle('reduce-motion', s.reduceMotion);
   }
 
-  /**
-   * Play a UI sound by id. No assets required; gracefully no-ops if file missing or muted.
-   * @param {'pickup'|'win'|'toast'} id
-   */
+  // =========================================================
+  // AUDIO
+  // =========================================================
+
   function playUiSound(id) {
     const settings = getSettings();
     if (settings.muteUiSounds) return;
+
     const map = { pickup: 'pickup', win: 'win', toast: 'toast' };
     const name = map[id];
     if (!name) return;
+
     try {
       var base = typeof window.CDN_ASSETS_URL !== 'undefined' ? window.CDN_ASSETS_URL : '';
       var url = (base ? base + '/' : '') + 'sounds/ui-' + name + '.mp3';
       var audio = new window.Audio(url);
       audio.volume = 0.4;
       audio.play().catch(function () {});
-    } catch (_) { /* no-op */ }
+    } catch (_) {}
   }
+
+  // =========================================================
+  // TIME FORMAT
+  // =========================================================
+
+  function formatRemainingMs(remainingMs) {
+    if (remainingMs == null || remainingMs <= 0) return null;
+    const totalSecs = Math.floor(remainingMs / 1000);
+    const m = Math.floor(totalSecs / 60);
+    const s = totalSecs % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function tickTimerDisplay() {
+    const textEl = document.getElementById('hud-timer-text');
+    if (!textEl) return;
+
+    // Hide the badge above the timer entirely (no "LOBBY"/"RUNNING" label)
+    const badgeEl = document.getElementById('hud-status-badge');
+    if (badgeEl) {
+      badgeEl.textContent = '';
+      badgeEl.style.display = 'none';
+    }
+
+    const status = (state.roundStatus || 'LOBBY').toUpperCase();
+
+    let remaining = null;
+    if (status === 'RUNNING' && state.matchEndsAtMs != null) {
+      remaining = Math.max(0, state.matchEndsAtMs - Date.now());
+    } else if (status === 'RESETTING' && state.resetEndsAtMs != null) {
+      remaining = Math.max(0, state.resetEndsAtMs - Date.now());
+    }
+
+    const formatted = formatRemainingMs(remaining);
+    textEl.textContent = formatted != null ? formatted : '--:--';
+
+    // End overlay countdown stays updated too
+    var endCountdownEl = document.getElementById('hud-end-countdown');
+    if (endCountdownEl && state.roundStatus === 'RESETTING' && state.resetEndsAtMs != null) {
+      var remainingEnd = Math.max(0, state.resetEndsAtMs - Date.now());
+      endCountdownEl.textContent = 'Next round in ' + (formatRemainingMs(remainingEnd) || '0:00');
+    }
+  }
+
+  // =========================================================
+  // CORE RENDER
+  // =========================================================
 
   function setState(partial) {
     Object.assign(state, partial);
     render();
+    tickTimerDisplay();
   }
 
   function render() {
     if (!root) root = document.getElementById('hud-root');
     if (!root) return;
 
-    const shardsEl = root.querySelector('.hud-shards-value');
+    // Shards
+    const shardsEl = document.getElementById('hud-shards-value');
     if (shardsEl) shardsEl.textContent = String(state.shards);
 
-    const roundWrap = root.querySelector('.hud-round-wrap');
-    if (roundWrap) {
-      const roundNum = roundWrap.querySelector('.hud-round-num');
-      const roundStatus = roundWrap.querySelector('.hud-round-status');
-      if (roundNum) roundNum.textContent = 'Round ' + state.roundId;
-      if (roundStatus) {
-        roundStatus.textContent = state.roundStatus;
-        roundStatus.className = 'hud-round-status ' + state.roundStatus.toLowerCase();
+    // Progress
+    renderProgress();
+
+    // Health
+    const healthEl = document.getElementById('hud-health-value');
+    const healthWrap = document.getElementById('hud-health');
+    if (healthEl && healthWrap) {
+      if (state.health != null) {
+        healthEl.textContent = String(state.health);
+        healthWrap.classList.remove('hidden');
+      } else {
+        healthWrap.classList.add('hidden');
       }
     }
 
-    const feedContainer = root.querySelector('.hud-feed');
-    if (feedContainer && state.feed.length > FEED_MAX) {
-      state.feed = state.feed.slice(-FEED_MAX);
-      renderFeed(feedContainer);
+    // Round
+    const roundNumEl = document.getElementById('hud-round-num');
+    const roundStatusEl = document.getElementById('hud-round-status');
+
+    if (roundNumEl) roundNumEl.textContent = 'Round ' + state.roundId;
+
+    // Remove "LOBBY" under Round: blank it out + hide it.
+    if (roundStatusEl) {
+      const rs = String(state.roundStatus || '').toUpperCase();
+      const show = rs !== 'LOBBY' && rs !== '';
+      roundStatusEl.textContent = show ? rs : '';
+      roundStatusEl.className = 'hud-round-status ' + rs.toLowerCase();
+      if (show) roundStatusEl.classList.remove('hidden');
+      else roundStatusEl.classList.add('hidden');
     }
 
     renderScoreboard();
     renderEndOverlay();
   }
 
-  function renderEndOverlay() {
-    const overlay = document.getElementById('hud-end-overlay');
-    const winnerEl = document.getElementById('hud-end-winner');
-    const listEl = document.getElementById('hud-end-leaderboard');
-    const countdownEl = document.getElementById('hud-end-countdown');
+  // =========================================================
+  // PROGRESS BAR
+  // =========================================================
 
-    if (!overlay || !winnerEl || !listEl) return;
+  function renderProgress() {
+    const fillEl = document.getElementById('hud-progress-fill');
+    const labelEl = document.getElementById('hud-progress-label');
+    const remainingEl = document.getElementById('hud-progress-remaining');
 
-    if (state.roundStatus === 'RESETTING') {
-      overlay.classList.remove('hidden');
-      overlay.setAttribute('aria-hidden', 'false');
+    if (!fillEl || !labelEl || !remainingEl) return;
 
-      winnerEl.textContent = state.winnerName
-        ? 'Winner: ' + state.winnerName
-        : 'Winner: —';
+    const shards = state.shards || 0;
+    const target = state.target || 0;
 
-      listEl.innerHTML = '';
-      if (Array.isArray(state.scores)) {
-        state.scores.slice(0, 5).forEach(function (entry) {
-          const li = document.createElement('li');
-          li.textContent = (entry.name != null ? entry.name : '—') + ' — ' + (typeof entry.score === 'number' ? entry.score : 0);
-          listEl.appendChild(li);
-        });
-      }
+    labelEl.textContent = `${shards} / ${target}`;
 
-      if (countdownEl && state.resetEndsAtMs != null) {
-        var remaining = Math.max(0, state.resetEndsAtMs - Date.now());
-        countdownEl.textContent = 'Next round in ' + (formatRemainingMs(remaining) || '0:00');
-      } else if (countdownEl) {
-        countdownEl.textContent = '';
-      }
+    if (target > 0) {
+      remainingEl.textContent =
+        shards >= target
+          ? 'WIN READY'
+          : `+${Math.max(0, target - shards)} to win`;
     } else {
-      overlay.classList.add('hidden');
-      overlay.setAttribute('aria-hidden', 'true');
-      if (countdownEl) countdownEl.textContent = '';
+      remainingEl.textContent = '+0 to win';
     }
+
+    const pct = target > 0
+      ? Math.max(0, Math.min(1, shards / target)) * 100
+      : 0;
+
+    fillEl.style.width = pct + '%';
   }
+
+  // =========================================================
+  // SCOREBOARD
+  // =========================================================
 
   function getLocalPlayerId() {
     try {
-      if (typeof window.hytopia !== 'undefined' && window.hytopia != null && typeof window.hytopia.playerId === 'string') {
+      if (window.hytopia && typeof window.hytopia.playerId === 'string') {
         return window.hytopia.playerId;
       }
-    } catch (_) { /* ignore */ }
+    } catch (_) {}
     return null;
   }
 
   function renderScoreboard() {
-    const listEl = root && document.getElementById('hud-scoreboard-list');
+    const listEl = document.getElementById('hud-scoreboard-list');
     if (!listEl) return;
 
     const scores = state.scores || [];
@@ -177,30 +242,59 @@
 
     scores.forEach(function (entry) {
       const li = document.createElement('li');
-      const name = entry.name != null ? String(entry.name) : '—';
-      const score = typeof entry.score === 'number' ? entry.score : 0;
+      const name = entry.name ?? '—';
+      const score = entry.score ?? 0;
+
       li.textContent = name + ' — ' + score;
-      if (localPlayerId != null && entry.playerId === localPlayerId) {
+
+      if (localPlayerId && entry.playerId === localPlayerId) {
         li.classList.add('hud-scoreboard__player--you');
       }
+
       listEl.appendChild(li);
     });
   }
 
-  function renderFeed(container) {
-    if (!container) container = root && root.querySelector('.hud-feed');
-    if (!container) return;
-    container.innerHTML = '';
-    state.feed.forEach(function (msg) {
-      const line = document.createElement('div');
-      line.className = 'hud-feed-line slide-in';
-      line.textContent = msg;
-      container.appendChild(line);
-    });
+  // =========================================================
+  // END OVERLAY
+  // =========================================================
+
+  function renderEndOverlay() {
+    const overlay = document.getElementById('hud-end-overlay');
+    const winnerEl = document.getElementById('hud-end-winner');
+    const listEl = document.getElementById('hud-end-leaderboard');
+
+    if (!overlay || !winnerEl || !listEl) return;
+
+    if (state.roundStatus === 'RESETTING') {
+      overlay.classList.remove('hidden');
+      overlay.setAttribute('aria-hidden', 'false');
+
+      winnerEl.textContent = state.winnerName
+        ? 'Winner: ' + state.winnerName
+        : 'Winner: —';
+
+      listEl.innerHTML = '';
+
+      (state.scores || []).slice(0, 5).forEach(function (entry) {
+        const li = document.createElement('li');
+        li.textContent = (entry.name ?? '—') + ' — ' + (entry.score ?? 0);
+        listEl.appendChild(li);
+      });
+    } else {
+      overlay.classList.add('hidden');
+      overlay.setAttribute('aria-hidden', 'true');
+      const endCountdownEl = document.getElementById('hud-end-countdown');
+      if (endCountdownEl) endCountdownEl.textContent = '';
+    }
   }
 
+  // =========================================================
+  // SHARD ANIMATION
+  // =========================================================
+
   function animateNumber(el, from, to, ms) {
-    if (!el || typeof from !== 'number' || typeof to !== 'number') return;
+    if (!el) return;
     const start = performance.now();
     function tick(now) {
       const t = Math.min((now - start) / ms, 1);
@@ -212,164 +306,48 @@
     requestAnimationFrame(tick);
   }
 
-  function pushToast(kind, message) {
-    if (!root) root = document.getElementById('hud-root');
-    const stack = root && root.querySelector('.hud-toast-stack');
-    if (!stack) return;
-
-    while (stack.children.length >= TOAST_MAX) stack.removeChild(stack.firstChild);
-
-    const el = document.createElement('div');
-    el.className = 'hud-toast ' + (kind || 'info') + ' fade-in';
-    el.textContent = message;
-    stack.appendChild(el);
-
-    setTimeout(function () {
-      el.classList.add('fade-out');
-      setTimeout(function () {
-        if (el.parentNode) el.parentNode.removeChild(el);
-      }, 400);
-    }, TOAST_DURATION_MS);
-  }
-
-  function pushFeed(message) {
-    state.feed = state.feed.slice(-(FEED_MAX - 1)).concat([message]);
-    const container = root && root.querySelector('.hud-feed');
-    if (!container) return;
-    const line = document.createElement('div');
-    line.className = 'hud-feed-line slide-in';
-    line.textContent = message;
-    container.appendChild(line);
-    while (container.children.length > FEED_MAX) container.removeChild(container.firstChild);
-  }
-
-  function showSplash(text) {
-    playUiSound('win');
-    if (!root) root = document.getElementById('hud-root');
-    let splash = root && root.querySelector('.hud-splash');
-    if (!splash && root) {
-      splash = document.createElement('div');
-      splash.className = 'hud-splash';
-      root.appendChild(splash);
-    }
-    if (!splash) return;
-    splash.textContent = text || '';
-    splash.classList.remove('animate');
-    splash.offsetHeight;
-    splash.classList.add('animate');
-    setTimeout(function () {
-      splash.classList.remove('animate');
-    }, 1200);
-  }
-
-  /** Format remaining ms as mm:ss. Returns null if no countdown. */
-  function formatRemainingMs(remainingMs) {
-    if (remainingMs == null || remainingMs <= 0) return null;
-    const totalSecs = Math.floor(remainingMs / 1000);
-    const m = Math.floor(totalSecs / 60);
-    const s = totalSecs % 60;
-    return m + ':' + (s < 10 ? '0' : '') + s;
-  }
-
-  /** Update only timer DOM elements from current state. No full render. */
-  function tickTimerDisplay() {
-    const badgeEl = document.getElementById('hud-status-badge');
-    const textEl = document.getElementById('hud-timer-text');
-    if (!badgeEl || !textEl) return;
-
-    const status = (state.roundStatus || 'LOBBY').toUpperCase();
-    badgeEl.textContent = status === 'RUNNING' ? 'RUNNING' : status === 'RESETTING' ? 'RESETTING' : 'LOBBY';
-    badgeEl.className = 'hud-status-badge';
-    if (status === 'RUNNING') badgeEl.classList.add('is-running');
-    else if (status === 'RESETTING') badgeEl.classList.add('is-resetting');
-    else badgeEl.classList.add('is-lobby');
-
-    let remaining = null;
-    if (status === 'RUNNING' && state.matchEndsAtMs != null) {
-      remaining = Math.max(0, state.matchEndsAtMs - Date.now());
-    } else if (status === 'RESETTING' && state.resetEndsAtMs != null) {
-      remaining = Math.max(0, state.resetEndsAtMs - Date.now());
-    }
-    const formatted = formatRemainingMs(remaining);
-    textEl.textContent = formatted != null ? formatted : '--:--';
-
-    var endCountdownEl = document.getElementById('hud-end-countdown');
-    if (endCountdownEl && state.roundStatus === 'RESETTING' && state.resetEndsAtMs != null) {
-      var remainingEnd = Math.max(0, state.resetEndsAtMs - Date.now());
-      endCountdownEl.textContent = 'Next round in ' + (formatRemainingMs(remainingEnd) || '0:00');
-    }
-  }
-
-  function startTimerTick() {
-    if (timerTickIntervalId) return;
-    tickTimerDisplay();
-    timerTickIntervalId = setInterval(tickTimerDisplay, 250);
-  }
-
-  function stopTimerTick() {
-    if (timerTickIntervalId) {
-      clearInterval(timerTickIntervalId);
-      timerTickIntervalId = null;
-    }
-  }
-
   function applyHudData(data) {
     if (data.v !== 1 || data.type !== 'hud') return;
+
     const fromShards = state.shards;
-    const toShards = typeof data.shards === 'number' ? data.shards : state.shards;
-    const roundId = typeof data.roundId === 'number' ? data.roundId : state.roundId;
-    const roundStatus = data.roundStatus != null ? data.roundStatus : (data.status != null ? data.status : state.roundStatus);
-    const target = typeof data.target === 'number' ? data.target : state.target;
-    const matchEndsAtMs = data.matchEndsAtMs !== undefined ? data.matchEndsAtMs : state.matchEndsAtMs;
-    const resetEndsAtMs = data.resetEndsAtMs !== undefined ? data.resetEndsAtMs : state.resetEndsAtMs;
+    const toShards = data.shards ?? state.shards;
 
     setState({
       shards: toShards,
-      roundId: roundId,
-      roundStatus: roundStatus,
-      target: target,
-      winnerName: data.winnerName !== undefined ? data.winnerName : state.winnerName,
-      matchEndsAtMs: matchEndsAtMs,
-      resetEndsAtMs: resetEndsAtMs,
-      scores: Array.isArray(data.scores) ? data.scores : state.scores
+      roundId: data.roundId ?? state.roundId,
+      roundStatus: data.status ?? state.roundStatus,
+      target: data.target ?? state.target,
+      winnerName: data.winnerName ?? state.winnerName,
+      matchEndsAtMs: data.matchEndsAtMs ?? state.matchEndsAtMs,
+      resetEndsAtMs: data.resetEndsAtMs ?? state.resetEndsAtMs,
+      scores: Array.isArray(data.scores) ? data.scores : state.scores,
+      health: data.health ?? state.health
     });
 
     if (fromShards !== toShards) {
-      var now = Date.now();
-      if (now - lastPickupTime <= STREAK_WINDOW_MS) {
-        streakCount += 1;
-      } else {
-        streakCount = 1;
-      }
+      const now = Date.now();
+      if (now - lastPickupTime <= STREAK_WINDOW_MS) streakCount++;
+      else streakCount = 1;
       lastPickupTime = now;
+
       playUiSound('pickup');
+
+      const shardsEl = document.getElementById('hud-shards-value');
+      if (shardsEl) {
+        animateNumber(shardsEl, fromShards, toShards, 300);
+        shardsEl.classList.add('glow');
+        setTimeout(() => shardsEl.classList.remove('glow'), 400);
+      }
+
       if (streakCount >= 2) {
-        pushToast('streak', 'STREAK x' + streakCount);
         playUiSound('toast');
       }
-
-      const shardsEl = root && root.querySelector('.hud-shards-value');
-      if (shardsEl) {
-        shardsEl.classList.remove('glow');
-        shardsEl.offsetHeight;
-        shardsEl.classList.add('glow');
-        animateNumber(shardsEl, fromShards, toShards, 400);
-      }
-      const shardsBox = root && root.querySelector('.hud-shards');
-      if (shardsBox) {
-        shardsBox.classList.remove('pulse');
-        shardsBox.offsetHeight;
-        shardsBox.classList.add('pulse');
-      }
-    }
-
-    var banner = root && root.querySelector('.hud-round');
-    if (banner) {
-      banner.classList.remove('slide-in');
-      banner.offsetHeight;
-      banner.classList.add('slide-in');
     }
   }
+
+  // =========================================================
+  // INIT (includes settings panel wiring)
+  // =========================================================
 
   function initSettingsPanel() {
     var panel = document.getElementById('hud-settings-panel');
@@ -378,19 +356,7 @@
 
     var settings = getSettings();
 
-    btn.addEventListener('click', function () {
-      var open = panel.getAttribute('aria-hidden') !== 'true';
-      panel.classList.toggle('open', !open);
-      panel.setAttribute('aria-hidden', open ? 'false' : 'true');
-    });
-
-    document.addEventListener('click', function (e) {
-      if (!panel.classList.contains('open')) return;
-      if (panel.contains(e.target) || btn.contains(e.target)) return;
-      panel.classList.remove('open');
-      panel.setAttribute('aria-hidden', 'true');
-    });
-
+    // Scale buttons
     root.querySelectorAll('.hud-settings-scale button').forEach(function (el) {
       var scale = Number(el.getAttribute('data-scale'));
       el.classList.toggle('active', settings.scale === scale);
@@ -401,10 +367,10 @@
         root.querySelectorAll('.hud-settings-scale button').forEach(function (b) {
           b.classList.toggle('active', Number(b.getAttribute('data-scale')) === scale);
         });
-        el.setAttribute('aria-pressed', 'true');
       });
     });
 
+    // Reduce motion
     var reduceEl = document.getElementById('hud-reduce-motion');
     if (reduceEl) {
       reduceEl.classList.toggle('on', settings.reduceMotion);
@@ -418,6 +384,7 @@
       });
     }
 
+    // Mute UI sounds
     var muteEl = document.getElementById('hud-mute-sounds');
     if (muteEl) {
       muteEl.classList.toggle('on', settings.muteUiSounds);
@@ -429,53 +396,61 @@
         muteEl.setAttribute('aria-checked', settings.muteUiSounds ? 'true' : 'false');
       });
     }
+
+    // Open/close panel
+    btn.addEventListener('click', function () {
+      var isOpen = panel.classList.contains('open');
+      if (isOpen) {
+        panel.classList.remove('open');
+        panel.setAttribute('aria-hidden', 'true');
+      } else {
+        panel.classList.add('open');
+        panel.setAttribute('aria-hidden', 'false');
+      }
+    });
+
+    // Click outside to close
+    document.addEventListener('click', function (e) {
+      if (!panel.classList.contains('open')) return;
+      if (panel.contains(e.target) || btn.contains(e.target)) return;
+      panel.classList.remove('open');
+      panel.setAttribute('aria-hidden', 'true');
+    });
   }
 
   function init() {
     root = document.getElementById('hud-root');
     if (!root) return;
+
     applySettings(getSettings());
     render();
-    startTimerTick();
+    tickTimerDisplay();
+    setInterval(tickTimerDisplay, 250);
+
     initSettingsPanel();
 
-    hytopia.onData(function (data) {
-      if (!data || typeof data.type !== 'string') return;
-      if (data.type === 'ping') {
-        const el = document.getElementById('ping-debug');
-        if (el) el.textContent = 'PING OK ' + (data.ts ?? '');
+    // Defer HUD data listener until hytopia is available (UI may load before SDK injects it)
+    function attachDataListener() {
+      if (typeof window.hytopia === 'undefined' || typeof window.hytopia.onData !== 'function') {
+        setTimeout(attachDataListener, 50);
         return;
       }
-      if (data.type === 'hud') {
-        applyHudData(data);
-        return;
-      }
-      if (data.type === 'toast') {
-        pushToast(data.kind || 'info', data.message || '');
-        return;
-      }
-      if (data.type === 'feed') {
-        pushFeed(data.message || '');
-        return;
-      }
-      if (data.type === 'roundSplash') {
-        var roundId = typeof data.roundId === 'number' ? data.roundId : state.roundId;
-        showSplash('Round ' + roundId);
-        return;
-      }
-    });
+      window.hytopia.onData(function (data) {
+        if (!data || typeof data.type !== 'string') return;
 
-    if (typeof window.HUD !== 'undefined') {
-      window.HUD.setState = setState;
-      window.HUD.render = render;
-      window.HUD.animateNumber = animateNumber;
-      window.HUD.pushToast = pushToast;
-      window.HUD.pushFeed = pushFeed;
-      window.HUD.showSplash = showSplash;
-      window.HUD.playUiSound = playUiSound;
-      window.HUD.getSettings = getSettings;
-      window.HUD.applySettings = applySettings;
+        if (data.type === 'hud') {
+          applyHudData(data);
+          return;
+        }
+
+        if (data.type === 'ping') {
+          const el = document.getElementById('ping-debug');
+          if (el) el.textContent = 'PING OK ' + (data.ts ?? '');
+          return;
+        }
+      });
     }
+    attachDataListener();
   }
 
   if (document.readyState === 'loading') {
@@ -483,15 +458,4 @@
   } else {
     init();
   }
-
-  window.HUD = window.HUD || {};
-  window.HUD.setState = setState;
-  window.HUD.render = render;
-  window.HUD.animateNumber = animateNumber;
-  window.HUD.pushToast = pushToast;
-  window.HUD.pushFeed = pushFeed;
-  window.HUD.showSplash = showSplash;
-  window.HUD.playUiSound = playUiSound;
-  window.HUD.getSettings = getSettings;
-  window.HUD.applySettings = applySettings;
 })();

@@ -89,7 +89,10 @@ export class RoundController {
 
     for (const p of matchPlayers) {
       const ps = this.worldState.getPlayer(p.id);
-      if (ps) delete ps.controlsLockedUntilMs;
+      if (ps) {
+        delete ps.controlsLockedUntilMs;
+        ps.health = 100;
+      }
     }
 
     this.shardSystem.resetForNewMatch(this.worldState.seed);

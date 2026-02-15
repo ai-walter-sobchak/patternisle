@@ -54,6 +54,20 @@ export interface PlayerState {
   connected: boolean;
   /** If set, inputs are locked until this time (ms since epoch); e.g. during RESETTING. */
   controlsLockedUntilMs?: number;
+  /** Combat: current health (default 100). */
+  health: number;
+  /** When this player was last damaged (ms since epoch). */
+  lastDamagedAtMs?: number;
+  /** Player who last damaged this player. */
+  lastDamagedByPlayerId?: string;
+  /** Optional: lockout until this time (ms) after KO before respawn. */
+  isEliminatedUntilMs?: number;
+  /** Melee cooldown: next attack allowed at or after this time (ms since epoch). */
+  lastAttackAtMs?: number;
+  /** Spawn protection: no damage until this time (ms since epoch). */
+  invulnerableUntilMs?: number;
+  /** Fall recovery: last time we recovered this player from void (ms since epoch); 2s cooldown. */
+  lastFallRecoveryAtMs?: number;
 }
 
 /** Round loop state: LOBBY → RUNNING → ENDED → RESETTING → RUNNING. */
