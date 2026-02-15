@@ -78,12 +78,12 @@ export const BOT_AI_INTERVAL_MS = parseInt(
   10
 );
 export const BOT_MAX_COUNT = Math.min(
-  8,
-  Math.max(1, parseInt(process.env.BOT_MAX_COUNT ?? '8', 10))
+  80,
+  Math.max(1, parseInt(process.env.BOT_MAX_COUNT ?? '80', 10))
 );
 export const BOT_DEFAULT_COUNT = Math.min(
   BOT_MAX_COUNT,
-  Math.max(1, parseInt(process.env.BOT_DEFAULT_COUNT ?? '3', 10))
+  Math.max(1, parseInt(process.env.BOT_DEFAULT_COUNT ?? '30', 10))
 );
 
 /** Per-human difficulty scaling state (for dynamic bot count/tier). */

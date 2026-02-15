@@ -92,6 +92,8 @@ import { PowerUpSystem } from './src/server/systems/PowerUpSystem.js';
 import { RoundController, TARGET_SHARDS } from './src/server/systems/RoundController.js';
 import { RoundManager } from './src/server/systems/RoundManager.js';
 import { BotManager } from './src/server/systems/BotManager.js';
+import { TowerSystem } from './src/server/systems/TowerSystem.js';
+import { DepositSystem } from './src/server/systems/DepositSystem.js';
 import { DEFAULT_MATCH_CONFIG } from './src/server/state/matchConfig.js';
 import { MELEE_DAMAGE, SPAWN_PROTECTION_MS } from './src/server/config/combat.js';
 
@@ -138,6 +140,10 @@ startServer(async world => {
 
   const powerUpSystem = new PowerUpSystem(world, worldState, spawnSystem, hud);
 
+  const towerSystem = new TowerSystem(world, worldState, hud);
+  const depositSystem = new DepositSystem(world, worldState, hud, towerSystem);
+  depositSystem.setTowerSystem(towerSystem);
+
   const botManager = new BotManager(world, worldState, {
     shardSystem,
     spawnSystem,
@@ -156,15 +162,24 @@ startServer(async world => {
     spawnSystem,
     hud,
     scoreService,
-    botManager
+    botManager,
+    towerSystem,
+    depositSystem
   );
+
+  towerSystem.setOnWinCallback((winnerPlayerId) => {
+    roundController.endMatch(winnerPlayerId);
+  });
 
   const combatService = new CombatService(
     world,
     worldState,
     roundController,
     hud,
-    scoreService
+    scoreService,
+    shardSystem,
+    depositSystem,
+    botManager
   );
 
   // =========================================================
@@ -312,6 +327,7 @@ startServer(async world => {
   setInterval(() => {
     const now = Date.now();
     roundController.tickObjectiveAndModes(now);
+    roundController.tickTower(now);
 
     if (
       worldState.matchConfig.mode === 'timetrial' &&
@@ -388,11 +404,19 @@ startServer(async world => {
         combatService.tryMeleeAttack(player);
         return;
       }
+      if (data?.type === 'interact_start' && worldState.matchConfig.mode === 'tower') {
+        depositSystem.startDeposit(player.id);
+        return;
+      }
+      if (data?.type === 'interact_end' && worldState.matchConfig.mode === 'tower') {
+        depositSystem.endDeposit(player.id);
+        return;
+      }
       // Lobby: mode selection and start (only when round is in LOBBY)
       if (worldState.roundState.status === 'LOBBY') {
         if (data?.type === 'set_mode' && typeof data.mode === 'string') {
           const mode = data.mode as import('./src/server/modes/types.js').GameMode;
-          const allowed: import('./src/server/modes/types.js').GameMode[] = ['MULTI', 'SOLO', 'survival', 'timetrial'];
+          const allowed: import('./src/server/modes/types.js').GameMode[] = ['MULTI', 'SOLO', 'survival', 'timetrial', 'tower'];
           if (allowed.includes(mode)) {
             worldState.matchConfig.mode = mode;
             hud.broadcastHud();
@@ -623,6 +647,65 @@ startServer(async world => {
       player,
       `Position: x=${p.x.toFixed(2)} y=${p.y.toFixed(2)} z=${p.z.toFixed(2)}`
     );
+  });
+
+  /** Dev: teleport to arena center (shard drop zone). */
+  world.chatManager.registerCommand('/teleport', player => {
+    if (!DEV_MODE) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: /teleport is DEV_MODE only.');
+      return;
+    }
+    const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
+    const entity = entities[0];
+    if (!entity?.isSpawned) {
+      world.chatManager.sendPlayerMessage(player, 'Not spawned.');
+      return;
+    }
+    const center = depositSystem.getConsolePosition();
+    const origin = { x: center.x, y: 50, z: center.z };
+    const direction = { x: 0, y: -1, z: 0 };
+    const hit = world.simulation.raycast(origin, direction, 200);
+    const y = hit ? hit.hitPoint.y + 2 : center.y + 2;
+    const pos = { x: center.x, y, z: center.z };
+    entity.setPosition(pos);
+    world.chatManager.sendPlayerMessage(player, `Teleported to arena center (shard drop zone).`, '00FF00');
+  });
+
+  /** Dev: add shards so you have enough for the next tier (or TARGET_SHARDS in non-tower). */
+  world.chatManager.registerCommand('/moreshards', player => {
+    if (!DEV_MODE) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: /moreshards is DEV_MODE only.');
+      return;
+    }
+    const p = worldState.getPlayer(player.id);
+    if (!p) {
+      world.chatManager.sendPlayerMessage(player, 'Not registered.');
+      return;
+    }
+    const mode = worldState.matchConfig.mode;
+    const tierThresholds = [8, 18, 30];
+    let need = 0;
+    if (mode === 'tower' && worldState.towerState) {
+      const ts = worldState.towerState;
+      const next = tierThresholds[ts.unlockedTier];
+      if (next != null) {
+        const current = (p.bankedShards ?? 0) + (p.carriedShards ?? 0);
+        need = Math.max(0, next - current);
+        if (need > 0) p.carriedShards = (p.carriedShards ?? 0) + need;
+      }
+    }
+    if (need <= 0) {
+      const current = p.shards ?? 0;
+      need = Math.max(0, TARGET_SHARDS - current);
+      if (need > 0) p.shards = current + need;
+    }
+    if (need > 0) {
+      hud.sendHud(player);
+      roundController?.onPlayerShardsChanged?.(player.id);
+      world.chatManager.sendPlayerMessage(player, `+${need} shards (next tier / target).`, '00FF00');
+    } else {
+      world.chatManager.sendPlayerMessage(player, 'You already have enough shards for the next tier.');
+    }
   });
 
   const MELEE_RANGE = 3.0;

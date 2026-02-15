@@ -59,6 +59,18 @@ export interface HudMessage {
   enemiesRemaining?: number;
   /** Time Trial: capture progress 0–100. */
   captureProgressPercent?: number;
+  /** Tower MVP: shards carried (not yet deposited). */
+  carriedShards?: number;
+  /** Tower MVP: shards banked at console. */
+  bankedShards?: number;
+  /** Tower MVP: shards needed for next tier (8, 18, 30). */
+  nextTierRequirement?: number;
+  /** Tower MVP: current roof hold time ms. */
+  roofHoldMs?: number;
+  /** Tower MVP: roof hold target ms to win (20000). */
+  roofHoldTargetMs?: number;
+  /** Tower MVP: whether roof zone is active. */
+  roofActive?: boolean;
 }
 
 export interface ToastMessage {

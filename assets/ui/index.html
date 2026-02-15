@@ -131,6 +131,7 @@
         <div class="hud-lobby-modes" role="group" aria-label="Game mode">
           <button type="button" class="hud-lobby-mode" data-mode="MULTI">Shard race (with bots)</button>
           <button type="button" class="hud-lobby-mode" data-mode="SOLO">Solo shard race</button>
+          <button type="button" class="hud-lobby-mode" data-mode="tower">Tower (deposit at center)</button>
           <button type="button" class="hud-lobby-mode" data-mode="survival">Survival</button>
           <button type="button" class="hud-lobby-mode" data-mode="timetrial">Time trial</button>
         </div>
@@ -181,20 +182,45 @@
       const mobileInteractButton = document.getElementById('mobile-interact-button');
       const mobileJumpButton = document.getElementById('mobile-jump-button');
 
+      function sendInteractStart() {
+        if (window.hytopia && typeof window.hytopia.sendData === 'function') {
+          window.hytopia.sendData({ type: 'interact_start' });
+        }
+      }
+      function sendInteractEnd() {
+        if (window.hytopia && typeof window.hytopia.sendData === 'function') {
+          window.hytopia.sendData({ type: 'interact_end' });
+        }
+      }
+
       if (mobileInteractButton) {
         mobileInteractButton.addEventListener('touchstart', e => {
           e.preventDefault();
           mobileInteractButton.classList.add('active');
           if (window.hytopia) hytopia.pressInput('ml', true);
           if (typeof window.triggerAttack === 'function') window.triggerAttack();
+          sendInteractStart();
         });
 
         mobileInteractButton.addEventListener('touchend', e => {
           e.preventDefault();
           mobileInteractButton.classList.remove('active');
           if (window.hytopia) hytopia.pressInput('ml', false);
+          sendInteractEnd();
         });
       }
+
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'e' || e.key === 'E') {
+          if (e.repeat) return;
+          sendInteractStart();
+        }
+      });
+      document.addEventListener('keyup', function (e) {
+        if (e.key === 'e' || e.key === 'E') {
+          sendInteractEnd();
+        }
+      });
 
       if (mobileJumpButton) {
         mobileJumpButton.addEventListener('touchstart', e => {

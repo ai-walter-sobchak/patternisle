@@ -17,6 +17,9 @@ import type { WorldState } from '../state/WorldState.js';
 import type { RoundController } from '../systems/RoundController.js';
 import type { HudService } from './HudService.js';
 import type { ScoreService } from './ScoreService.js';
+import type { ShardSystem } from '../systems/ShardSystem.js';
+import type { DepositSystem } from '../systems/DepositSystem.js';
+import type { BotManager } from '../systems/BotManager.js';
 import {
   DEFAULT_MAX_HEALTH,
   MELEE_DAMAGE,
@@ -54,7 +57,10 @@ export class CombatService {
     private readonly worldState: WorldState,
     private readonly roundController: RoundController,
     private readonly hudService: HudService,
-    private readonly scoreService: ScoreService
+    private readonly scoreService: ScoreService,
+    private readonly shardSystem?: ShardSystem,
+    private readonly depositSystem?: DepositSystem,
+    private readonly botManager?: BotManager
   ) {}
 
   resetHealth(playerId: string): void {
@@ -106,8 +112,8 @@ export class CombatService {
       return { ok: false, reason: 'cooldown' };
     }
 
-    const hitPlayerId = this.performMeleeHitDetection(attacker);
-    if (!hitPlayerId) {
+    const hitTargetId = this.performMeleeHitDetection(attacker);
+    if (!hitTargetId) {
       if (COMBAT_DEBUG) {
         console.log(`[combat] tryMeleeAttack ${attackerId} miss`);
       }
@@ -119,18 +125,18 @@ export class CombatService {
     const p = this.worldState.getPlayer(attackerId);
     if (p) p.lastAttackAtMs = now;
 
-    const result = this.damage(hitPlayerId, MELEE_DAMAGE, {
+    const result = this.damage(hitTargetId, MELEE_DAMAGE, {
       kind: 'melee',
       attackerId,
     });
 
     if (result.killed && COMBAT_DEBUG) {
-      console.log(`[combat] tryMeleeAttack ${attackerId} killed ${hitPlayerId}`);
+      console.log(`[combat] tryMeleeAttack ${attackerId} killed ${hitTargetId}`);
     }
 
-    this.applyKnockback(hitPlayerId, attackerId);
+    this.applyKnockback(hitTargetId, attackerId);
 
-    return { ok: true, hitPlayerId };
+    return { ok: true, hitPlayerId: hitTargetId };
   }
 
   /**
@@ -171,6 +177,8 @@ export class CombatService {
     victimState.health = Math.max(0, current - amount);
     victimState.lastDamagedAtMs = now;
     victimState.lastDamagedByPlayerId = attackerId;
+
+    this.depositSystem?.cancelDeposit(victimId);
 
     const killed = victimState.health <= 0;
     if (killed) {
@@ -223,50 +231,65 @@ export class CombatService {
       };
     }
 
-    const connected = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
-    let best: { playerId: string; dist: number } | null = null;
+    let best: { id: string; dist: number } | null = null;
 
-    for (const other of connected) {
-      if (other.id === attacker.id) continue;
-      const otherEntities = this.world.entityManager.getPlayerEntitiesByPlayer(other);
-      const otherEntity = otherEntities[0];
-      if (!otherEntity?.isSpawned) continue;
-
-      const targetPos = otherEntity.position;
+    const checkTarget = (targetId: string, targetPos: { x: number; y: number; z: number }) => {
+      if (targetId === attacker.id) return;
       const dx = targetPos.x - origin.x;
       const dy = targetPos.y - origin.y;
       const dz = targetPos.z - origin.z;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist > MELEE_RANGE) continue;
-
+      if (dist > MELEE_RANGE) return;
       const dot =
         (dx * direction.x + dy * direction.y + dz * direction.z) / Math.max(dist, 0.001);
-      if (dot < 0.3) continue;
+      if (dot < 0.3) return;
+      if (!best || dist < best.dist) best = { id: targetId, dist };
+    };
 
-      if (!best || dist < best.dist) {
-        best = { playerId: other.id, dist };
+    const connected = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
+    for (const other of connected) {
+      const otherEntities = this.world.entityManager.getPlayerEntitiesByPlayer(other);
+      const otherEntity = otherEntities[0];
+      if (!otherEntity?.isSpawned) continue;
+      checkTarget(other.id, otherEntity.position);
+    }
+
+    if (this.botManager) {
+      for (const bot of this.botManager.getBots()) {
+        const pos = this.botManager.getBotPosition(bot.botId);
+        if (pos) checkTarget(bot.botId, pos);
       }
     }
 
-    return best?.playerId;
+    return best?.id;
   }
 
-  /** Apply knockback impulse to victim (e.g. after melee or /hit). */
+  /** Apply knockback impulse to victim (e.g. after melee or /hit). Works for players and bots. */
   applyKnockback(victimId: string, attackerId: string): void {
-    const victimPlayer = this.getPlayerById(victimId);
     const attackerPlayer = this.getPlayerById(attackerId);
-    if (!victimPlayer || !attackerPlayer) return;
-
-    const victimEntities = this.world.entityManager.getPlayerEntitiesByPlayer(victimPlayer);
-    const attackerEntities = this.world.entityManager.getPlayerEntitiesByPlayer(attackerPlayer);
-    const victimEntity = victimEntities[0];
-    const attackerEntity = attackerEntities[0];
-    if (!victimEntity?.isSpawned || !attackerEntity?.isSpawned) return;
+    const attackerEntity = attackerPlayer
+      ? this.world.entityManager.getPlayerEntitiesByPlayer(attackerPlayer)[0]
+      : undefined;
+    if (!attackerEntity?.isSpawned) return;
 
     const ax = attackerEntity.position.x;
     const az = attackerEntity.position.z;
-    const vx = victimEntity.position.x;
-    const vz = victimEntity.position.z;
+
+    let vx: number;
+    let vz: number;
+    let victimEntity: { position: { x: number; z: number }; applyImpulse?: (v: { x: number; y: number; z: number }) => void } | undefined;
+
+    const victimPlayer = this.getPlayerById(victimId);
+    if (victimPlayer) {
+      const entities = this.world.entityManager.getPlayerEntitiesByPlayer(victimPlayer);
+      victimEntity = entities[0];
+    } else if (this.botManager?.getBotEntity(victimId)) {
+      victimEntity = this.botManager.getBotEntity(victimId) as typeof victimEntity;
+    }
+    if (!victimEntity?.position) return;
+
+    vx = victimEntity.position.x;
+    vz = victimEntity.position.z;
     let dx = vx - ax;
     let dz = vz - az;
     const xzLen = Math.sqrt(dx * dx + dz * dz) || 1;
@@ -290,6 +313,23 @@ export class CombatService {
       return;
     }
 
+    const victimState = this.worldState.getPlayer(victimId);
+    const isBot = victimId.startsWith('bot-');
+
+    if (this.worldState.matchConfig.mode === 'tower') {
+      const carried = victimState?.carriedShards ?? 0;
+      if (carried > 0 && this.shardSystem) {
+        const pos = this.getVictimPositionForDrop(victimId);
+        this.shardSystem.spawnDroppedShards(pos, carried);
+      }
+      if (victimState) victimState.carriedShards = 0;
+      this.depositSystem?.cancelDeposit(victimId);
+    } else if (isBot && victimState && (victimState.shards ?? 0) > 0 && this.shardSystem) {
+      const pos = this.getVictimPositionForDrop(victimId);
+      this.shardSystem.spawnDroppedShards(pos, victimState.shards);
+      victimState.shards = 0;
+    }
+
     const attackerName = attackerId ? this.getPlayerDisplayName(attackerId) : null;
     const victimName = this.getPlayerDisplayName(victimId);
     const isEnvironment = !attackerId || attackerId === 'boundary' || attackerId === 'hazard';
@@ -308,20 +348,37 @@ export class CombatService {
     this.hudService.broadcastFeed(feedMsg);
     this.hudService.broadcastHud();
 
-    const victimState = this.worldState.getPlayer(victimId);
-    if (victimState) {
+    if (victimState && !isBot) {
       victimState.controlsLockedUntilMs = Date.now() + RESPAWN_DELAY_MS;
     }
 
     setTimeout(() => {
-      const victimPlayer = this.getPlayerById(victimId);
-      if (!victimPlayer) return;
-      this.respawn(victimPlayer);
-      this.hudService.toast(victimPlayer, 'info', 'Respawned');
+      if (isBot && this.botManager) {
+        this.botManager.respawnBot(victimId);
+      } else {
+        const victimPlayer = this.getPlayerById(victimId);
+        if (!victimPlayer) return;
+        this.respawn(victimPlayer);
+        this.hudService.toast(victimPlayer, 'info', 'Respawned');
+      }
     }, RESPAWN_DELAY_MS);
   }
 
+  private getVictimPositionForDrop(victimId: string): { x: number; y: number; z: number } {
+    const victimPlayer = this.getPlayerById(victimId);
+    if (victimPlayer) {
+      const entities = this.world.entityManager.getPlayerEntitiesByPlayer(victimPlayer);
+      const entity = entities[0];
+      if (entity?.isSpawned) return { ...entity.position };
+    }
+    const pos = this.botManager?.getBotPosition(victimId);
+    if (pos) return pos;
+    return { x: 0, y: 0, z: 0 };
+  }
+
   private getPlayerDisplayName(playerId: string): string {
+    const botName = this.worldState.botDisplayNames?.get(playerId);
+    if (botName) return botName;
     const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     const found = players.find((p) => p.id === playerId);
     if (

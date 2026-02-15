@@ -14,6 +14,8 @@ import type { SpawnSystem } from './SpawnSystem.js';
 import type { HudService } from '../services/HudService.js';
 import type { ScoreService } from '../services/ScoreService.js';
 import type { BotManager } from './BotManager.js';
+import type { TowerSystem } from './TowerSystem.js';
+import type { DepositSystem } from './DepositSystem.js';
 import { TARGET_SHARDS } from '../constants.js';
 import { ARENA_BOUNDS } from '../config/arenaBounds.js';
 import { ARENA_V1_TIMED_MATCH_ONLY } from '../config/arenaMode.js';
@@ -52,7 +54,9 @@ export class RoundController {
     private readonly spawnSystem: SpawnSystem,
     private readonly hud: HudService,
     private readonly scoreService: ScoreService,
-    private readonly botManager?: BotManager
+    private readonly botManager?: BotManager,
+    private readonly towerSystem?: TowerSystem,
+    private readonly depositSystem?: DepositSystem
   ) {}
 
   /* -------------------------------------------------------------------------- */
@@ -175,6 +179,24 @@ export class RoundController {
     const seedForRound = roundSeedNumeric(this.worldState.seed, roundId);
     this.shardSystem.resetForNewMatch(seedForRound);
     this.powerUpSystem.resetForNewRound(POWERUP_SPAWN_COUNT, seedForRound);
+
+    if (config.mode === 'tower') {
+      this.worldState.towerState = {
+        unlockedTier: 0,
+        roofHoldMs: 0,
+        roofActive: false,
+      };
+      const roundSeedStr = config.seed + (roundId === 1 ? '' : `_r${roundId}`);
+      this.towerSystem?.initRound(roundId, roundSeedStr);
+      const origin = { x: 0, y: 50, z: 0 };
+      const hit = this.world.simulation.raycast(origin, { x: 0, y: -1, z: 0 }, 200);
+      const consoleY = hit ? hit.hitPoint.y + 1 : 1;
+      this.depositSystem?.setConsoleY(consoleY);
+      this.depositSystem?.spawnZoneMarker();
+    } else {
+      this.worldState.towerState = null;
+      this.depositSystem?.despawnZoneMarker();
+    }
 
     this.ensureSpawnPoints();
 
@@ -324,9 +346,9 @@ export class RoundController {
    * Call from /restart or when UI sends restart_request.
    */
   handleRestartRequest(): boolean {
+    if (this.worldState.roundState.status !== 'ENDED') return false;
     const surv = this.worldState.survivalState;
     const tt = this.worldState.timeTrialState;
-    if (surv.status !== 'ENDED' && tt.status !== 'ENDED') return false;
 
     this.worldState.matchConfig.seed =
       this.worldState.usedSeed + ':next:' + Date.now();
@@ -435,6 +457,7 @@ export class RoundController {
 
   onPlayerShardsChanged(playerId: string): void {
     if (this.worldState.roundState.status !== 'RUNNING') return;
+    if (this.worldState.matchConfig.mode === 'tower') return;
 
     const p = this.worldState.getPlayer(playerId);
     if (!p || p.shards < TARGET_SHARDS) return;
@@ -542,6 +565,12 @@ export class RoundController {
       }
     }
     return out;
+  }
+
+  tickTower(nowMs: number): void {
+    if (this.worldState.matchConfig.mode !== 'tower') return;
+    this.depositSystem?.tick(nowMs);
+    this.towerSystem?.tickRoofHold(nowMs);
   }
 
   private teleportPlayerTo(

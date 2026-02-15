@@ -45,6 +45,10 @@ export interface ObjectiveState {
 export interface PlayerState {
   playerId: string;
   shards: number;
+  /** Tower MVP: shards currently carried (dropped on death). */
+  carriedShards: number;
+  /** Tower MVP: shards deposited at center console (count toward tower tiers). */
+  bankedShards: number;
   /** @deprecated Use worldState.score (Phase 5C). Kept for UI/debug until 5D. */
   objectivePoints: number;
   unlockedTechniques: string[];
@@ -174,4 +178,14 @@ export type PowerUpState = {
   respawnMaxMs: number;
   /** Last tick time for throttling */
   lastTickAtMs?: number;
+};
+
+/** Tower MVP: per-round tower progress and roof hold. */
+export type TowerState = {
+  /** 0 = none, 1/2/3 = tier unlocked. */
+  unlockedTier: number;
+  /** Cumulative ms player has held roof zone (solo). */
+  roofHoldMs: number;
+  /** True when tier 3 is unlocked and roof zone is active. */
+  roofActive: boolean;
 };

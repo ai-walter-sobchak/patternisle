@@ -77,11 +77,22 @@ export function plan(
   let state: BotState['state'] = bot.state;
   let target: BotAction['target'] = bot.currentTarget;
 
+  // Spread: sometimes pick a different shard so bots don't all pile on the same one (explore arena)
+  const pickSpreadShard = (): { x: number; y: number; z: number } | null => {
+    if (snapshot.shardPositions.length === 0) return null;
+    if (snapshot.shardPositions.length === 1) {
+      const s = snapshot.shardPositions[0]!;
+      return { x: s.x, y: s.y, z: s.z };
+    }
+    const idx = Math.floor(rng(10) * snapshot.shardPositions.length);
+    const s = snapshot.shardPositions[idx]!;
+    return { x: s.x, y: s.y, z: s.z };
+  };
+
   // Mistake: sometimes pick wrong target (go toward a random shard or stand)
   if (mistake && nearestShard && snapshot.shardPositions.length > 1) {
-    const idx = Math.floor(rng(2) * snapshot.shardPositions.length);
-    const wrong = snapshot.shardPositions[idx]!;
-    target = { x: wrong.x, y: wrong.y, z: wrong.z };
+    const wrong = pickSpreadShard();
+    if (wrong) target = wrong;
     state = 'SEEK_OBJECTIVE';
   } else if (nearPlayer && nearestPlayer) {
     const botShards = snapshot.shardsByEntityId.get(bot.botId) ?? 0;
@@ -97,11 +108,11 @@ export function plan(
       target = nearestPlayer.playerId; // move away from this id
     } else {
       state = 'SEEK_OBJECTIVE';
-      target = nearestShard ? { x: nearestShard.x, y: nearestShard.y, z: nearestShard.z } : null;
+      target = (rng(11) < 0.25 ? pickSpreadShard() : null) ?? (nearestShard ? { x: nearestShard.x, y: nearestShard.y, z: nearestShard.z } : null);
     }
   } else {
     state = 'SEEK_OBJECTIVE';
-    target = nearestShard ? { x: nearestShard.x, y: nearestShard.y, z: nearestShard.z } : null;
+    target = (rng(12) < 0.25 ? pickSpreadShard() : null) ?? (nearestShard ? { x: nearestShard.x, y: nearestShard.y, z: nearestShard.z } : null);
   }
 
   // ---- Move direction ----

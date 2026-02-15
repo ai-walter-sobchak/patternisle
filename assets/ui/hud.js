@@ -17,7 +17,13 @@
     health: null,
     effects: [],
     ambientScore: 0,
-    mode: 'MULTI'
+    mode: 'MULTI',
+    carriedShards: 0,
+    bankedShards: 0,
+    nextTierRequirement: null,
+    roofHoldMs: 0,
+    roofHoldTargetMs: 20000,
+    roofActive: false
   };
 
   const FEED_MAX = 6;
@@ -141,9 +147,11 @@
     if (!root) root = document.getElementById('hud-root');
     if (!root) return;
 
-    // Shards
+    // Shards (tower: show carried; else show shards)
     const shardsEl = document.getElementById('hud-shards-value');
-    if (shardsEl) shardsEl.textContent = String(state.shards);
+    if (shardsEl) {
+      shardsEl.textContent = String(state.mode === 'tower' ? (state.carriedShards ?? 0) : state.shards);
+    }
 
     // Progress
     renderProgress();
@@ -287,25 +295,47 @@
 
     if (!fillEl || !labelEl || !remainingEl) return;
 
+    const isTower = state.mode === 'tower';
     const shards = state.shards || 0;
     const target = state.target || 0;
+    const carried = state.carriedShards ?? 0;
+    const banked = state.bankedShards ?? 0;
+    const nextTier = state.nextTierRequirement;
 
-    labelEl.textContent = `${shards} / ${target}`;
-
-    if (target > 0) {
-      remainingEl.textContent =
-        shards >= target
-          ? 'WIN READY'
-          : `+${Math.max(0, target - shards)} to win`;
+    if (isTower) {
+      labelEl.textContent = carried + ' carried \u2022 ' + banked + ' banked';
+      var depositHint = 'Stand on the platform \u2022 Hold E to deposit';
+      if (state.roofActive && state.roofHoldTargetMs) {
+        const sec = Math.floor((state.roofHoldMs || 0) / 1000);
+        const totalSec = Math.floor(state.roofHoldTargetMs / 1000);
+        remainingEl.textContent = 'Roof: ' + sec + '/' + totalSec + 's \u2022 ' + depositHint;
+      } else if (nextTier != null) {
+        const need = Math.max(0, nextTier - banked);
+        remainingEl.textContent = need > 0
+          ? 'Next tier: ' + need + ' more \u2022 ' + depositHint
+          : 'Tier unlocked! ' + depositHint;
+      } else {
+        remainingEl.textContent = depositHint;
+      }
+      const pct = (nextTier != null && nextTier > 0)
+        ? Math.max(0, Math.min(1, banked / nextTier)) * 100
+        : 0;
+      fillEl.style.width = pct + '%';
     } else {
-      remainingEl.textContent = '+0 to win';
+      labelEl.textContent = shards + ' / ' + target;
+      if (target > 0) {
+        remainingEl.textContent =
+          shards >= target
+            ? 'WIN READY'
+            : '+' + Math.max(0, target - shards) + ' to win';
+      } else {
+        remainingEl.textContent = '+0 to win';
+      }
+      const pct = target > 0
+        ? Math.max(0, Math.min(1, shards / target)) * 100
+        : 0;
+      fillEl.style.width = pct + '%';
     }
-
-    const pct = target > 0
-      ? Math.max(0, Math.min(1, shards / target)) * 100
-      : 0;
-
-    fillEl.style.width = pct + '%';
   }
 
   // =========================================================
@@ -423,7 +453,13 @@
       health: health,
       effects: Array.isArray(data.effects) ? data.effects : state.effects,
       ambientScore: data.ambientScore ?? state.ambientScore,
-      mode: data.mode ?? state.mode
+      mode: data.mode ?? state.mode,
+      carriedShards: data.carriedShards ?? state.carriedShards,
+      bankedShards: data.bankedShards ?? state.bankedShards,
+      nextTierRequirement: data.nextTierRequirement != null ? data.nextTierRequirement : state.nextTierRequirement,
+      roofHoldMs: data.roofHoldMs ?? state.roofHoldMs,
+      roofHoldTargetMs: data.roofHoldTargetMs ?? state.roofHoldTargetMs,
+      roofActive: data.roofActive ?? state.roofActive
     });
 
     if (fromShards !== toShards) {

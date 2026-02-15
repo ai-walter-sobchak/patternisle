@@ -11,6 +11,7 @@ import type {
   RoundState,
   ScoreState,
   SpawnState,
+  TowerState,
 } from './types.js';
 import type { MapSpecV1 } from '../procgen/spec.js';
 import type { MatchConfig } from '../modes/types.js';
@@ -77,6 +78,9 @@ export class WorldState {
   /** Solo Time Trial mode state. */
   timeTrialState: TimeTrialState = { ...INITIAL_TIME_TRIAL_STATE };
 
+  /** Tower MVP: tier unlock and roof hold. Null when mode is not tower. */
+  towerState: TowerState | null = null;
+
   /** Spawn points and last-used index per player; managed by SpawnSystem. */
   spawn: SpawnState = {
     spawnPoints: [],
@@ -128,6 +132,8 @@ export class WorldState {
       state = {
         playerId,
         shards: 0,
+        carriedShards: 0,
+        bankedShards: 0,
         objectivePoints: 0,
         unlockedTechniques: [],
         fragments: [],
@@ -177,6 +183,8 @@ export class WorldState {
   resetAllPlayerShards(): void {
     for (const p of this.players.values()) {
       p.shards = 0;
+      p.carriedShards = 0;
+      p.bankedShards = 0;
     }
   }
 
@@ -185,5 +193,7 @@ export class WorldState {
     const ps = this.getPlayer(playerId);
     if (!ps) return;
     ps.shards = 0;
+    ps.carriedShards = 0;
+    ps.bankedShards = 0;
   }
 }

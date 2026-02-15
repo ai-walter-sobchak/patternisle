@@ -49,8 +49,10 @@ export interface ShardSystemOptions {
 
 export class ShardSystem {
   readonly pickups: Map<string, ShardPickupState> = new Map();
+  readonly droppedPickups: Map<string, ShardPickupState> = new Map();
   readonly config: ShardSystemConfig = { ...DEFAULT_CONFIG };
   private spawned = false;
+  private droppedIdSeq = 0;
   private readonly onShardsAwarded?: (playerId: string) => void;
   private readonly hud?: HudService;
 
@@ -158,6 +160,34 @@ export class ShardSystem {
       if (state.entity?.isSpawned) state.entity.despawn();
     }
     this.pickups.clear();
+    for (const state of this.droppedPickups.values()) {
+      if (state.entity?.isSpawned) state.entity.despawn();
+    }
+    this.droppedPickups.clear();
+  }
+
+  /**
+   * Tower MVP: spawn physical shard pickups at position (e.g. on death). Each has value 1.
+   */
+  spawnDroppedShards(centerPos: { x: number; y: number; z: number }, count: number): void {
+    for (let i = 0; i < count; i++) {
+      const offset = 0.6 * (i % 5 - 2);
+      const pos = {
+        x: centerPos.x + (i % 3) * 0.5 - 0.5,
+        y: centerPos.y,
+        z: centerPos.z + offset,
+      };
+      const id = `dropped-${Date.now()}-${this.droppedIdSeq++}`;
+      const entity = createShardPickupEntity(this.world, pos);
+      const state: ShardPickupState = {
+        id,
+        pos: { ...pos },
+        value: 1,
+        collected: false,
+        entity,
+      };
+      this.droppedPickups.set(id, state);
+    }
   }
 
   /**
@@ -170,6 +200,7 @@ export class ShardSystem {
     );
     const pickupRadiusSq = this.config.pickupRadius * this.config.pickupRadius;
     const scanRadius = this.config.scanRadius;
+    const isTower = this.worldState.matchConfig.mode === 'tower';
 
     for (const player of players) {
       const entities = this.world.entityManager.getPlayerEntitiesByPlayer(
@@ -179,28 +210,31 @@ export class ShardSystem {
       if (!playerEntity?.isSpawned) continue;
       const playerPos = playerEntity.position;
 
-      for (const state of this.pickups.values()) {
-        if (state.collected) continue;
-        // Use entity position when available (model entities can have different pivot than spawn pos)
+      const tryCollect = (state: ShardPickupState, isDropped: boolean) => {
+        if (state.collected) return;
         const pickupPos = state.entity?.position ?? state.pos;
         if (
           Math.abs(playerPos.x - pickupPos.x) > scanRadius ||
           Math.abs(playerPos.y - pickupPos.y) > scanRadius ||
           Math.abs(playerPos.z - pickupPos.z) > scanRadius
         )
-          continue;
-        if (sqDist(playerPos, pickupPos) > pickupRadiusSq) continue;
+          return;
+        if (sqDist(playerPos, pickupPos) > pickupRadiusSq) return;
 
-        // Despawn first so the block disappears for all clients before we update state
         const entityToDespawn = state.entity;
-        if (entityToDespawn?.isSpawned) {
-          entityToDespawn.despawn();
-        }
+        if (entityToDespawn?.isSpawned) entityToDespawn.despawn();
         state.collected = true;
         state.entity = undefined;
 
         const p = this.worldState.getPlayer(player.id);
-        if (p) {
+        if (!p) return;
+
+        if (isTower) {
+          p.carriedShards = (p.carriedShards ?? 0) + state.value;
+          this.hud?.sendHud(player);
+          this.hud?.feed(player, `+${state.value} shards`);
+          this.hud?.toast(player, 'good', `+${state.value} shards`);
+        } else {
           p.shards += state.value;
           const total = p.shards;
           this.hud?.sendHud(player);
@@ -213,21 +247,31 @@ export class ShardSystem {
           );
           this.onShardsAwarded?.(player.id);
         }
+      };
+
+      for (const state of this.pickups.values()) tryCollect(state, false);
+      for (const state of this.droppedPickups.values()) {
+        tryCollect(state, false);
+        if (state.collected) this.droppedPickups.delete(state.id);
       }
     }
   }
+
+  /** Bots use a larger pickup radius so they collect reliably (they move in 1-unit steps). */
+  private static readonly BOT_PICKUP_RADIUS = 4;
+  private static readonly BOT_SCAN_RADIUS = 5;
 
   /**
    * Try to collect a shard at the given position for a bot. Server-authoritative.
    * Returns true if a pickup was collected and bot state was updated.
    */
   tryCollectForBot(botId: string, position: { x: number; y: number; z: number }): boolean {
-    const pickupRadiusSq = this.config.pickupRadius * this.config.pickupRadius;
-    const scanRadius = this.config.scanRadius;
+    const pickupRadiusSq = ShardSystem.BOT_PICKUP_RADIUS * ShardSystem.BOT_PICKUP_RADIUS;
+    const scanRadius = ShardSystem.BOT_SCAN_RADIUS;
 
     for (const state of this.pickups.values()) {
       if (state.collected) continue;
-      const pickupPos = state.entity?.position ?? state.pos;
+      const pickupPos = state.entity?.isSpawned ? state.entity.position : state.pos;
       if (
         Math.abs(position.x - pickupPos.x) > scanRadius ||
         Math.abs(position.y - pickupPos.y) > scanRadius ||

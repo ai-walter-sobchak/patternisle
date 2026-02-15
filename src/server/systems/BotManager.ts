@@ -13,7 +13,16 @@
  * 7. After 3 human wins in a row, next round should increase bot count; after 2 losses, decrease (check logs).
  */
 
-import { Entity, World, PlayerManager, Collider, ColliderShape, RigidBodyType } from 'hytopia';
+import {
+  Entity,
+  World,
+  PlayerManager,
+  Collider,
+  ColliderShape,
+  RigidBodyType,
+  EntityModelAnimationLoopMode,
+} from 'hytopia';
+import { SPAWN_PROTECTION_MS } from '../config/combat.js';
 import type { WorldState } from '../state/WorldState.js';
 import type { ShardSystem } from './ShardSystem.js';
 import type { SpawnSystem } from './SpawnSystem.js';
@@ -55,6 +64,9 @@ const BOT_USE_MODEL = true;
 /** GLTF model for bot NPCs (used when BOT_USE_MODEL is true). */
 const BOT_MODEL_URI = 'models/goblin-shaman.gltf';
 const BOT_MODEL_SCALE = 1;
+/** Goblin model animation names (from goblin-shaman.gltf). */
+const BOT_ANIM_IDLE = 'animation.goblin_shaman.idle';
+const BOT_ANIM_WALK = 'animation.goblin_shaman.walk';
 /** Block fallback when BOT_USE_MODEL is false (guarantees visible NPCs). */
 const BOT_BLOCK_HALF_EXTENTS = { x: 0.4, y: 0.6, z: 0.4 };
 const BOT_BLOCK_TEXTURE = 'blocks/emerald-ore.png';
@@ -227,6 +239,10 @@ export class BotManager {
         isEnvironmental: false,
         modelUri: BOT_MODEL_URI,
         modelScale: BOT_MODEL_SCALE,
+        modelAnimations: [
+          { name: BOT_ANIM_IDLE, loopMode: EntityModelAnimationLoopMode.LOOP, play: true },
+          { name: BOT_ANIM_WALK, loopMode: EntityModelAnimationLoopMode.LOOP, play: false },
+        ],
         rigidBodyOptions: {
           type: RigidBodyType.KINEMATIC_POSITION,
           colliders: [collider],
@@ -257,14 +273,31 @@ export class BotManager {
     this.botEntities.clear();
   }
 
+  /**
+   * Spawn bots across the full arena so they don't cluster in the center.
+   * Uses a deterministic grid over ARENA_BOUNDS (ignores player perimeter ring).
+   */
   private getSpawnPositionsForBots(count: number): SpawnPoint[] {
-    const playerPositions = this.getHumanAndBotPositions();
+    const { minX, maxX, minZ, maxZ, y } = ARENA_BOUNDS;
+    const margin = 4;
+    const rangeX = maxX - minX - 2 * margin;
+    const rangeZ = maxZ - minZ - 2 * margin;
+    if (rangeX <= 0 || rangeZ <= 0) {
+      return Array.from({ length: count }, () => ({ x: (minX + maxX) / 2, y, z: (minZ + maxZ) / 2 }));
+    }
+    const cols = Math.max(1, Math.ceil(Math.sqrt(count * (rangeX / rangeZ))));
+    const rows = Math.max(1, Math.ceil(count / cols));
+    const stepX = cols > 1 ? rangeX / (cols - 1) : 0;
+    const stepZ = rows > 1 ? rangeZ / (rows - 1) : 0;
     const points: SpawnPoint[] = [];
     for (let i = 0; i < count; i++) {
-      const botId = `bot-${this.worldState.roundState.roundId}-${i}`;
-      const pos = this.options.spawnSystem.getSpawnForPlayer(botId, playerPositions);
-      points.push(pos);
-      playerPositions.push({ playerId: botId, position: { ...pos } });
+      const col = i % cols;
+      const row = Math.floor(i / cols) % rows;
+      points.push({
+        x: minX + margin + col * stepX,
+        y,
+        z: minZ + margin + row * stepZ,
+      });
     }
     return points;
   }
@@ -290,7 +323,7 @@ export class BotManager {
     const shardPositions: Array<{ id: string; x: number; y: number; z: number }> = [];
     for (const [id, state] of this.options.shardSystem.pickups) {
       if (state.collected) continue;
-      const pos = state.pos;
+      const pos = state.entity?.isSpawned ? state.entity.position : state.pos;
       shardPositions.push({ id, x: pos.x, y: pos.y, z: pos.z });
     }
 
@@ -385,6 +418,19 @@ export class BotManager {
       const botEntity = this.botEntities.get(bot.botId);
       if (botEntity?.isSpawned) {
         botEntity.setPosition(bot.position);
+        if (BOT_USE_MODEL && botEntity.isModelEntity) {
+          const isMoving =
+            moveDir.x !== 0 || moveDir.y !== 0 || moveDir.z !== 0;
+          const idleAnim = botEntity.getModelAnimation(BOT_ANIM_IDLE);
+          const walkAnim = botEntity.getModelAnimation(BOT_ANIM_WALK);
+          if (isMoving) {
+            walkAnim?.play();
+            idleAnim?.pause();
+          } else {
+            idleAnim?.play();
+            walkAnim?.pause();
+          }
+        }
       }
     }
   }
@@ -405,5 +451,50 @@ export class BotManager {
 
   getBots(): ReadonlyArray<BotState> {
     return this.bots;
+  }
+
+  /** Get the in-world entity for a bot (for combat knockback / position). */
+  getBotEntity(botId: string): Entity | undefined {
+    return this.botEntities.get(botId);
+  }
+
+  /** Get current position of a bot (from BotState; use for hit detection and drop position). */
+  getBotPosition(botId: string): { x: number; y: number; z: number } | undefined {
+    const bot = this.bots.find(b => b.botId === botId);
+    return bot ? { ...bot.position } : undefined;
+  }
+
+  /**
+   * Respawn a bot after death: new spawn point, reset health, short invulnerability.
+   * Call after RESPAWN_DELAY_MS from combat KO.
+   */
+  respawnBot(botId: string): void {
+    const bot = this.bots.find(b => b.botId === botId);
+    if (!bot) return;
+
+    const positions = this.getHumanAndBotPositions();
+    const pos = this.options.spawnSystem.getSpawnForPlayer(botId, positions);
+    const resolved = this.resolveGroundPosition(pos);
+
+    bot.position.x = resolved.x;
+    bot.position.y = resolved.y;
+    bot.position.z = resolved.z;
+
+    const entity = this.botEntities.get(botId);
+    if (entity?.isSpawned) {
+      entity.setPosition(resolved);
+    }
+
+    const ps = this.worldState.getPlayer(botId);
+    if (ps) {
+      const max = ps.maxHealth ?? 100;
+      ps.health = max;
+      ps.invulnerableUntilMs = Date.now() + SPAWN_PROTECTION_MS;
+      ps.lastKillerId = undefined;
+    }
+
+    if (BOT_DEBUG_LOGS) {
+      console.log(`[BotManager] respawnBot ${botId} at ${resolved.x.toFixed(1)},${resolved.y.toFixed(1)},${resolved.z.toFixed(1)}`);
+    }
   }
 }

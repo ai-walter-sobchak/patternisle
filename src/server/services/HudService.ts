@@ -81,6 +81,20 @@ export class HudService {
       }
     }
 
+    if (config.mode === 'tower') {
+      msg.carriedShards = p?.carriedShards ?? 0;
+      msg.bankedShards = p?.bankedShards ?? 0;
+      const ts = this.worldState.towerState;
+      if (ts) {
+        const tierThresholds = [8, 18, 30];
+        const next = tierThresholds[ts.unlockedTier];
+        msg.nextTierRequirement = next;
+        msg.roofHoldMs = ts.roofHoldMs;
+        msg.roofHoldTargetMs = 20000;
+        msg.roofActive = ts.roofActive;
+      }
+    }
+
     if (r.winnerPlayerId != null) {
       // Winner display name from score store if present, else live player display name, else id.
       const entry = this.worldState.score.scoresByPlayerId[r.winnerPlayerId];
@@ -105,25 +119,30 @@ export class HudService {
   }
 
   /**
-   * Leaderboard derived from WorldState player shards (humans + bots).
-   * Sorted by shards desc, then name asc.
-   *
-   * NOTE: score === shards for now.
+   * Leaderboard derived from WorldState (humans + bots).
+   * Tower mode: score = bankedShards + carriedShards. Other modes: score = shards.
+   * Sorted by score desc, then name asc.
    */
   private getLeaderboard(): Array<{ playerId: string; name: string; score: number }> {
     const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     const entries: Array<{ playerId: string; name: string; score: number }> = [];
+    const isTower = this.worldState.matchConfig.mode === 'tower';
 
     for (const pl of players) {
       const p = this.worldState.getPlayer(pl.id);
       const name = this.getPlayerDisplayName(pl.id);
-      const score = p?.shards ?? 0;
+      const score = isTower
+        ? (p?.bankedShards ?? 0) + (p?.carriedShards ?? 0)
+        : (p?.shards ?? 0);
       entries.push({ playerId: pl.id, name, score });
     }
     for (const [botId, displayName] of this.worldState.botDisplayNames) {
       const p = this.worldState.getPlayer(botId);
       if (p) {
-        entries.push({ playerId: botId, name: displayName, score: p.shards });
+        const score = isTower
+          ? (p.bankedShards ?? 0) + (p.carriedShards ?? 0)
+          : p.shards;
+        entries.push({ playerId: botId, name: displayName, score });
       }
     }
     return entries.sort((a, b) => {
