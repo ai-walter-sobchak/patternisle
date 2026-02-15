@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:procgen": "tsx scripts/procgen_smoke.ts",
+    "test:procgen:build": "tsx scripts/procgen_build_test.ts",
+    "test": "npm run test:procgen && npm run test:procgen:build",
     "build": "hytopia build",
     "package": "hytopia package",
     "upgrade-assets-library": "hytopia upgrade-assets-library",

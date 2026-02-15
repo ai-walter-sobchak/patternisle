@@ -12,6 +12,7 @@ import type {
   ScoreState,
   SpawnState,
 } from './types.js';
+import type { MapSpecV1 } from '../procgen/spec.js';
 
 /** Salt used when deriving seed from matchId. Changing this changes all derived seeds. */
 const SEED_SALT = 'patternisle-match-v1';
@@ -48,6 +49,9 @@ export class WorldState {
 
   /** Map data for floor-aware spawns; set from index after load (optional). */
   mapData: MapData | null = null;
+
+  /** When set by /seed (dev), the generated procgen spec for this match; used for logging/sharing. */
+  procgenSpec: MapSpecV1 | null = null;
 
   /** Spawn points and last-used index per player; managed by SpawnSystem. */
   spawn: SpawnState = {

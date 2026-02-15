@@ -8,6 +8,7 @@ import { PlayerManager } from 'hytopia';
 import type { WorldState } from '../state/WorldState.js';
 import type { ScoreEntry } from '../state/types.js';
 import type { ShardSystem } from './ShardSystem.js';
+import type { PowerUpSystem } from './PowerUpSystem.js';
 import type { ObjectiveSystem } from './ObjectiveSystem.js';
 import type { SpawnSystem } from './SpawnSystem.js';
 import type { HudService } from '../services/HudService.js';
@@ -15,16 +16,28 @@ import type { ScoreService } from '../services/ScoreService.js';
 import { TARGET_SHARDS } from '../constants.js';
 import { ARENA_BOUNDS } from '../config/arenaBounds.js';
 import { ARENA_V1_TIMED_MATCH_ONLY } from '../config/arenaMode.js';
+import { generateValidArena } from '../procgen/generateValidArena.js';
+import { specToMap } from '../procgen/specToMap.js';
+import { generateTheme } from '../procgen/themes.js';
 
 export { TARGET_SHARDS };
 
 const ROUND_RESET_DELAY_MS = 8000;
+const POWERUP_SPAWN_COUNT = 12;
+
+/** Numeric seed for this round so shards and powerups get new positions every round. */
+function roundSeedNumeric(baseSeed: number, roundId: number): number {
+  return (baseSeed + roundId * 7919) >>> 0;
+}
 
 export class RoundController {
+  private startMatchInProgress = false;
+
   constructor(
     private readonly world: World,
     private readonly worldState: WorldState,
     private readonly shardSystem: ShardSystem,
+    private readonly powerUpSystem: PowerUpSystem,
     private readonly objectiveSystem: ObjectiveSystem,
     private readonly spawnSystem: SpawnSystem,
     private readonly hud: HudService,
@@ -37,18 +50,58 @@ export class RoundController {
 
   /** Dev / command: start a match immediately (e.g. /forcestart, /start). */
   forceStart(): void {
-    this.startMatch();
+    if (this.worldState.roundState.status === 'STARTING' || this.startMatchInProgress) return;
+    this.beginStartMatch();
   }
 
-  startMatch(): void {
+  /**
+   * Kick off round start: set STARTING, generate procgen map from round seed, load it, then finish start.
+   */
+  private beginStartMatch(): void {
+    const r = this.worldState.roundState;
+    if (r.status === 'STARTING' || this.startMatchInProgress) return;
+    r.status = 'STARTING';
+    this.startMatchInProgress = true;
+    this.startMatchAsync().catch((err) => {
+      console.error('[RoundController] startMatchAsync failed', err);
+      r.status = 'RESETTING';
+      this.startMatchInProgress = false;
+    });
+  }
+
+  private async startMatchAsync(): Promise<void> {
+    const r = this.worldState.roundState;
+    const nextRoundId = r.roundId == null ? 1 : r.roundId + 1;
+    const roundSeed = `${this.worldState.matchId}_r${nextRoundId}`;
+
+    const { spec, usedSeed } = generateValidArena(roundSeed, 16);
+    const theme = generateTheme(roundSeed);
+    const map = specToMap(spec, theme);
+
+    await this.world.loadMap(map);
+
+    this.worldState.mapData = map;
+    this.worldState.procgenSpec = spec;
+    this.worldState.spawn.spawnPoints = [];
+    this.worldState.spawn.lastSpawnIndexByPlayerId = {};
+
+    if (usedSeed.startsWith('fallback')) {
+      console.warn('[RoundController] round used fallback spec', { roundSeed, usedSeed });
+    }
+
+    this.finishStartMatch(nextRoundId);
+    this.startMatchInProgress = false;
+  }
+
+  private finishStartMatch(roundId: number): void {
     const now = Date.now();
     const r = this.worldState.roundState;
 
     r.status = 'RUNNING';
+    r.roundId = roundId;
     r.matchEndsAtMs = now + r.matchDurationMs;
     r.resetEndsAtMs = undefined;
     r.winnerPlayerId = undefined;
-    r.roundId = r.roundId == null ? 1 : r.roundId + 1;
 
     const players = this.getMatchPlayers();
 
@@ -59,7 +112,9 @@ export class RoundController {
     this.scoreService.resetForPlayers(players);
     this.worldState.resetAllPlayerShards();
 
-    this.shardSystem.resetForNewMatch(this.worldState.seed);
+    const seedForRound = roundSeedNumeric(this.worldState.seed, roundId);
+    this.shardSystem.resetForNewMatch(seedForRound);
+    this.powerUpSystem.resetForNewRound(POWERUP_SPAWN_COUNT, seedForRound);
 
     this.ensureSpawnPoints();
 
@@ -75,6 +130,11 @@ export class RoundController {
 
     this.hud.broadcastRoundSplash();
     this.hud.broadcastHud();
+  }
+
+  /** Called by tick when RESETTING delay has elapsed; kicks off async map load then match start. */
+  startMatch(): void {
+    this.beginStartMatch();
   }
 
   /* -------------------------------------------------------------------------- */
@@ -185,6 +245,12 @@ export class RoundController {
 
   private ensureSpawnPoints(): void {
     if (this.worldState.spawn.spawnPoints.length > 0) return;
+
+    // Procgen maps: use spec spawn zones so players spawn inside the arena pads, not on the outer edge
+    if (this.worldState.procgenSpec) {
+      this.spawnSystem.buildSpawnPointsFromProcgenSpec(this.worldState.procgenSpec, 16);
+      return;
+    }
 
     if (this.worldState.mapData) {
       this.spawnSystem.buildSurfaceSpawnPointsFromMap(

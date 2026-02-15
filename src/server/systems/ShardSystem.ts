@@ -10,6 +10,8 @@ import type { ShardPickupState } from '../entities/ShardPickup.js';
 import { createShardPickupEntity } from '../entities/ShardPickup.js';
 import type { WorldState } from '../state/WorldState.js';
 import type { HudService } from '../services/HudService.js';
+import { ARENA_BOUNDS } from '../config/arenaBounds.js';
+import { sampleRingPosition } from '../procgen/ringSpawnPositions.js';
 
 export interface ShardSystemConfig {
   count: number;
@@ -70,8 +72,9 @@ export class ShardSystem {
     this.spawned = true;
 
     const rng = createDeterministicRng(seed);
-    const center = { x: 0, y: 10, z: 0 };
-    const { count, radius, minSpacing } = this.config;
+    const { count, minSpacing } = this.config;
+    const spec = this.worldState.procgenSpec;
+    const { minX, maxX, minZ, maxZ } = ARENA_BOUNDS;
     const minSq = minSpacing * minSpacing;
     const positions: { x: number; y: number; z: number }[] = [];
     const maxAttempts = count * 200;
@@ -85,8 +88,16 @@ export class ShardSystem {
 
     while (positions.length < count && attempts < maxAttempts) {
       attempts++;
-      const x = center.x + (rng() * 2 - 1) * radius;
-      const z = center.z + (rng() * 2 - 1) * radius;
+      let x: number;
+      let z: number;
+      if (spec) {
+        const p = sampleRingPosition(spec, rng);
+        x = p.x;
+        z = p.z;
+      } else {
+        x = minX + rng() * (maxX - minX);
+        z = minZ + rng() * (maxZ - minZ);
+      }
       rng(); // keep RNG sequence unchanged (was used for y)
       const origin = { x, y: RAYCAST_START_Y, z };
       const hit = this.world.simulation.raycast(
@@ -144,7 +155,7 @@ export class ShardSystem {
 
   private clearPickups(): void {
     for (const state of this.pickups.values()) {
-      if (state.entity) state.entity.despawn();
+      if (state.entity?.isSpawned) state.entity.despawn();
     }
     this.pickups.clear();
   }
@@ -180,8 +191,12 @@ export class ShardSystem {
           continue;
         if (sqDist(playerPos, pickupPos) > pickupRadiusSq) continue;
 
+        // Despawn first so the block disappears for all clients before we update state
+        const entityToDespawn = state.entity;
+        if (entityToDespawn?.isSpawned) {
+          entityToDespawn.despawn();
+        }
         state.collected = true;
-        if (state.entity) state.entity.despawn();
         state.entity = undefined;
 
         const p = this.worldState.getPlayer(player.id);

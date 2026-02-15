@@ -15,6 +15,8 @@ import type {
   ActiveEffect,
 } from '../state/types.js';
 import { ARENA_BOUNDS } from '../config/arenaBounds.js';
+import { createDeterministicRng } from '../utils/deterministicRng.js';
+import { sampleRingPosition } from '../procgen/ringSpawnPositions.js';
 import { createPowerUpPickupEntity } from '../entities/PowerUpPickup.js';
 
 const PICKUP_RADIUS = 2.5;
@@ -54,7 +56,8 @@ function randomInRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-function randomKind(): PowerUpKind {
+function randomKind(rng?: () => number): PowerUpKind {
+  if (rng) return POWERUP_KINDS[Math.floor(rng() * POWERUP_KINDS.length)];
   return POWERUP_KINDS[Math.floor(Math.random() * POWERUP_KINDS.length)];
 }
 
@@ -92,6 +95,37 @@ export class PowerUpSystem {
     for (let i = 0; i < count; i++) {
       const id = `pu-${Date.now()}-${++this.spawnIdCounter}`;
       const kind = randomKind();
+      const position = resolveGroundPosition(this.world, positions[i]);
+      const entity = createPowerUpPickupEntity(this.world, position, kind);
+      this.entitiesBySpawnId.set(id, entity);
+      const spawn: PowerUpSpawn = {
+        id,
+        kind,
+        position: { ...position },
+        isActive: true,
+      };
+      powerUps.spawnsById[id] = spawn;
+    }
+  }
+
+  /**
+   * Clear all power-up spawns and entities, then create new spawns spread across the full arena
+   * using deterministic positions from roundSeed. Call at the start of each round.
+   */
+  resetForNewRound(count: number, roundSeed: number): void {
+    const { powerUps } = this.worldState;
+    for (const entity of this.entitiesBySpawnId.values()) {
+      if (entity?.isSpawned) entity.despawn();
+    }
+    this.entitiesBySpawnId.clear();
+    powerUps.spawnsById = {};
+
+    const rng = createDeterministicRng(roundSeed);
+    const positions = this.getSpawnPositionsFromSeed(count, rng);
+
+    for (let i = 0; i < positions.length; i++) {
+      const id = `pu-${Date.now()}-${++this.spawnIdCounter}`;
+      const kind = randomKind(rng);
       const position = resolveGroundPosition(this.world, positions[i]);
       const entity = createPowerUpPickupEntity(this.world, position, kind);
       this.entitiesBySpawnId.set(id, entity);
@@ -225,6 +259,29 @@ export class PowerUpSystem {
         y,
         z: randomInRange(minZ, maxZ),
       });
+    }
+    return out;
+  }
+
+  /** Deterministic positions across arena rings (or full bounds fallback) for round reseed. */
+  private getSpawnPositionsFromSeed(
+    count: number,
+    rng: () => number
+  ): Array<{ x: number; y: number; z: number }> {
+    const out: Array<{ x: number; y: number; z: number }> = [];
+    const spec = this.worldState.procgenSpec;
+    const { minX, maxX, minZ, maxZ, y } = ARENA_BOUNDS;
+    for (let i = 0; i < count; i++) {
+      if (spec) {
+        const p = sampleRingPosition(spec, rng);
+        out.push({ x: p.x, y, z: p.z });
+      } else {
+        out.push({
+          x: minX + rng() * (maxX - minX),
+          y,
+          z: minZ + rng() * (maxZ - minZ),
+        });
+      }
     }
     return out;
   }

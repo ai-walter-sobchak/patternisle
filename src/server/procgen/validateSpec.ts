@@ -5,11 +5,17 @@ export function validateSpec(spec: MapSpecV1): { ok: true } | { ok: false; error
 
   if (spec.v !== 1) errors.push("spec.v must be 1");
   if (spec.size <= 0) errors.push("spec.size must be > 0");
-  if (spec.rings !== 3) errors.push("spec.rings must be 3");
-  if (!spec.ringRadii || spec.ringRadii.length !== 3) errors.push("spec.ringRadii must have 3 entries");
+  if (![3, 4, 5].includes(spec.rings)) errors.push("spec.rings must be 3, 4, or 5");
+  if (!spec.ringRadii || spec.ringRadii.length !== spec.rings) errors.push("spec.ringRadii length must match spec.rings");
 
-  const [r0, r1, r2] = spec.ringRadii;
-  if (!(r0 > r1 && r1 > r2 && r2 > 0)) errors.push("ringRadii must be strictly decreasing and > 0");
+  const radii = spec.ringRadii;
+  for (let i = 0; i < radii.length - 1; i++) {
+    if (!(radii[i] > radii[i + 1] && radii[i + 1] > 0)) {
+      errors.push("ringRadii must be strictly decreasing and > 0");
+      break;
+    }
+  }
+  if (radii.length > 0 && radii[radii.length - 1] <= 0) errors.push("innermost ring radius must be > 0");
 
   if (spec.spawnZones.length !== 4) errors.push("must have exactly 4 spawnZones");
   const teams = new Set(spec.spawnZones.map(s => s.teamId));

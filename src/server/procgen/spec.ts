@@ -29,9 +29,10 @@ export type MapSpecV1 = {
   size: number;
   center: Vec2;
 
-  rings: 3;
-  // Radii for rings (outer -> inner). outerRadii[0] is outer boundary ring radius.
-  ringRadii: [number, number, number];
+  /** Number of concentric rings (3, 4, or 5). More rings = tighter center, more maze. */
+  rings: 3 | 4 | 5;
+  /** Radii for rings (outer -> inner). ringRadii[0] is outer boundary, ringRadii[rings-1] is innermost. */
+  ringRadii: number[];
 
   // Lane structure
   segments: number; // ring segmentation count

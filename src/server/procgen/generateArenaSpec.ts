@@ -3,8 +3,8 @@ import { Cover, MapSpecV1, Rect, SpawnZone, Vec2, WallSegment } from "./spec";
 
 type Opts = {
   size?: number;     // default 250
-  rings?: 3;          // locked to 3
-  teams?: 4;          // locked to 4
+  rings?: 3 | 4 | 5; // 4–5 for tighter center maze
+  teams?: 4;         // locked to 4
 };
 
 function clamp(n: number, min: number, max: number) {
@@ -77,28 +77,40 @@ export function generateArenaSpec(seed: string, opts: Opts = {}): MapSpecV1 {
 
   const center: Vec2 = { x: Math.floor(size / 2), y: Math.floor(size / 2) };
 
-  // Outer radius leaves boundary margin; allow small jitter
-  const outerRadius = clamp(Math.floor(size * 0.46) + rng.int(-4, 6), 100, Math.floor(size / 2) - 6);
+  // Tighter outer radius so center and lanes feel less wide open
+  const outerRadius = clamp(Math.floor(size * 0.40) + rng.int(-6, 8), 85, Math.floor(size / 2) - 6);
 
-  // 3 rings: outer boundary, mid ring, inner ring (around objective approaches)
-  const ringGapBase = rng.int(18, 26);
-  const ringGapJitter = () => rng.int(-3, 3);
+  // Ring count: 4 or 5 for more concentric corridors and a tighter center maze
+  const numRings = (opts.rings ?? rng.pick([4, 5])) as 3 | 4 | 5;
+
+  // Narrower ring gaps; inner gaps smaller so we don't run out of radius
+  const ringGapBase = rng.int(10, 18);
+  const ringGapJitter = () => rng.int(-2, 3);
+  const innerGapScale = 0.7; // inner rings closer together
 
   const r0 = outerRadius;
-  const r1 = clamp(r0 - (ringGapBase + ringGapJitter()), 40, r0 - 10);
-  const r2 = clamp(r1 - (ringGapBase + ringGapJitter()), 26, r1 - 10);
+  const ringRadii: number[] = [r0];
+  let rPrev = r0;
+  for (let i = 1; i < numRings; i++) {
+    const gap = i >= numRings - 1 ? (ringGapBase + ringGapJitter()) * innerGapScale : ringGapBase + ringGapJitter();
+    const rNext = clamp(rPrev - gap, i === numRings - 1 ? 16 : 20, rPrev - 6);
+    ringRadii.push(rNext);
+    rPrev = rNext;
+  }
+  const innerR = ringRadii[ringRadii.length - 1];
 
-  const segments = rng.int(16, 24);     // more segments = smoother rings
-  const spokes = rng.int(5, 9);         // spoke lanes
+  // More segments and spokes = more maze corridors and winding paths
+  const segments = rng.int(24, 36);
+  const spokes = rng.int(6, 12);
 
-  const wallThickness = rng.int(2, 3);  // blocks
+  // 2–3 blocks: thick enough for corridors but gates stay open for connectivity
+  const wallThickness = rng.int(2, 3);
 
   const wallSegments: WallSegment[] = [];
 
-  // Gates per ring: ensure at least 4 spread per ring so each quadrant has a path (connectivity)
+  // Fewer gates = more winding paths; keep one per quadrant for connectivity
   const spreadGates = (count: number) => {
     const s = new Set<number>();
-    // One gate per quadrant (0°, 90°, 180°, 270°) plus jitter so all 4 spawns can reach center
     const step = Math.max(1, Math.floor(segments / 4));
     for (let q = 0; q < 4; q++) {
       const base = (q * step + rng.int(0, Math.max(0, step - 1))) % segments;
@@ -107,46 +119,34 @@ export function generateArenaSpec(seed: string, opts: Opts = {}): MapSpecV1 {
     while (s.size < count) s.add(rng.int(0, segments - 1));
     return s;
   };
-  const gateCountOuter = rng.int(4, 6);
-  const gateCountMid = rng.int(4, 6);
-  const gateCountInner = rng.int(3, 5);
 
-  const gatesOuter = spreadGates(gateCountOuter);
-  const gatesMid = spreadGates(gateCountMid);
-  const gatesInner = spreadGates(gateCountInner);
-
-  // Optional perimeter dents (only add, never remove the spread gates)
-  if (rng.bool(0.5)) {
-    for (const g of Array.from(gatesOuter)) {
-      if (rng.bool(0.4)) gatesOuter.add((g + 1) % segments);
-      if (rng.bool(0.25)) gatesOuter.add((g + segments - 1) % segments);
-    }
+  // Gates per ring: outer has more, inner fewer so center is maze-like
+  for (let i = 0; i < ringRadii.length; i++) {
+    const gateCount = i === 0 ? rng.int(4, 6) : Math.max(3, rng.int(3, 5) - i);
+    const gates = spreadGates(gateCount);
+    const tag = i === 0 ? "perimeter" : "ring";
+    addRing(wallSegments, center, ringRadii[i], segments, wallThickness, gates, tag);
   }
 
-  addRing(wallSegments, center, r0, segments, wallThickness, gatesOuter, "perimeter");
-  addRing(wallSegments, center, r1, segments, wallThickness, gatesMid, "ring");
-  addRing(wallSegments, center, r2, segments, wallThickness, gatesInner, "ring");
-
-  // Spokes: choose angles not evenly spaced, and allow "missing spoke" segments to create asymmetry
+  // Spokes: varied angles and more often with mid gaps for winding routes
   const spokeAngles: number[] = [];
   const baseAngles = rng.shuffle([0, 60, 120, 180, 240, 300, 30, 90, 150, 210, 270, 330]);
   for (let i = 0; i < spokes; i++) {
-    const a = baseAngles[i % baseAngles.length] + rng.int(-10, 10);
+    const a = baseAngles[i % baseAngles.length] + rng.int(-12, 12);
     spokeAngles.push((a + 360) % 360);
   }
 
   for (const a of spokeAngles) {
-    // Each spoke goes from near outer ring to near inner ring, but can have a gap (choke) or offset
-    const startR = r0 - rng.int(6, 10);
-    const endR = r2 + rng.int(4, 10);
+    const startR = r0 - rng.int(6, 12);
+    const endR = innerR + rng.int(2, 8);
 
     const p0 = polar(center, startR, a);
     const p1 = polar(center, endR, a);
 
-    // Optional choke/gap in the middle (reduced so lanes stay connected)
-    if (rng.bool(0.2)) {
+    // More often add a choke so you have to wind around
+    if (rng.bool(0.5)) {
       const midR = (startR + endR) / 2;
-      const gap = rng.int(10, 18);
+      const gap = rng.int(6, 12);
       const pA = polar(center, midR + gap / 2, a);
       const pB = polar(center, midR - gap / 2, a);
       wallSegments.push({ a: p0, b: pA, thickness: wallThickness, tag: "spoke" });
@@ -156,10 +156,24 @@ export function generateArenaSpec(seed: string, opts: Opts = {}): MapSpecV1 {
     }
   }
 
-  // Objective
-  const objectiveRadius = rng.int(10, 14); // blocks
+  // Objective: small center so the middle is a clear goal
+  const objectiveRadius = rng.int(6, 10); // blocks
   const objective = { center, radius: objectiveRadius };
 
+  // Inner maze: short radial walls inside the innermost ring (don't reach center) for extra winding
+  const innerMazeSpokes = rng.int(3, 6);
+  const innerMazeAngles = rng.shuffle([0, 45, 90, 135, 180, 225, 270, 315]).slice(0, innerMazeSpokes);
+  for (const a of innerMazeAngles) {
+    const aDeg = (a + rng.int(-12, 12) + 360) % 360;
+    const startR = innerR - rng.int(2, 4);
+    const endR = innerR - rng.int(6, 11);
+    if (endR < objectiveRadius + 5) continue;
+    const p0 = polar(center, startR, aDeg);
+    const p1 = polar(center, endR, aDeg);
+    wallSegments.push({ a: p0, b: p1, thickness: wallThickness, tag: "spoke" });
+  }
+
+  // Objective: smaller center so the middle isn’t so vast
   // Spawn zones: 4 outer pads at roughly quadrants, with per-team jitter and variable pad size
   const padW = rng.int(10, 14);
   const padH = rng.int(10, 14);
@@ -191,19 +205,19 @@ export function generateArenaSpec(seed: string, opts: Opts = {}): MapSpecV1 {
     });
   }
 
-  // Cover: seeded scatter in mid lanes, avoid spawn pads and objective donut
+  // Cover + accents: more obstacles along the way so areas feel less wide open
   const cover: Cover[] = [];
-  const coverCount = rng.int(60, 95);
+  const coverCount = rng.int(100, 145);
 
-  const isInsideObjectiveNoCover = (p: Vec2) => dist(p, center) < objectiveRadius + 12; // donut
+  const isInsideObjectiveNoCover = (p: Vec2) => dist(p, center) < objectiveRadius + 10; // donut
   const isInsideSpawn = (p: Vec2) => spawnZones.some((s) => {
     const r = s.rect;
     return p.x >= r.x - 2 && p.x <= r.x + r.w + 2 && p.y >= r.y - 2 && p.y <= r.y + r.h + 2;
   });
 
   for (let i = 0; i < coverCount; i++) {
-    // sample radius mostly between mid and inner ring
-    const rr = rng.int(r2 + 8, r0 - 12);
+    // sample radius between inner and outer ring so obstacles fill lanes and center approach
+    const rr = rng.int(innerR + 6, r0 - 10);
     const aa = rng.int(0, 359);
     const p = polar(center, rr, aa);
 
@@ -223,8 +237,8 @@ export function generateArenaSpec(seed: string, opts: Opts = {}): MapSpecV1 {
     seed,
     size,
     center,
-    rings: 3,
-    ringRadii: [r0, r1, r2],
+    rings: numRings,
+    ringRadii,
     segments,
     spokes,
     spawnZones,

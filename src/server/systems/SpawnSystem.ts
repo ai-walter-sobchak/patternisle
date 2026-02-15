@@ -5,6 +5,7 @@
 
 import type { WorldState } from '../state/WorldState.js';
 import type { SpawnPoint } from '../state/types.js';
+import type { MapSpecV1 } from '../procgen/spec.js';
 
 const MIN_SAFE_DIST = 4.0;
 const MIN_SAFE_DIST_SQ = MIN_SAFE_DIST * MIN_SAFE_DIST;
@@ -145,6 +146,34 @@ export class SpawnSystem {
     // F) Store
     this.worldState.spawn.spawnPoints = selected;
     return selected;
+  }
+
+  /**
+   * Build spawn points from procgen spec spawn zones so players spawn inside the arena pads,
+   * not on the outer edge of the map. Converts spec 2D coords to world 3D (centered at 0,0).
+   */
+  buildSpawnPointsFromProcgenSpec(spec: MapSpecV1, count: number = 16): SpawnPoint[] {
+    const center = spec.center;
+    const points: SpawnPoint[] = [];
+    const spawnY = 6; // above floor; raycast will find ground
+
+    for (const zone of spec.spawnZones) {
+      const { x, y, w, h } = zone.rect;
+      // World coords: spec (x,y) -> world x = x - center.x, z = y - center.y
+      const toWorld = (sx: number, sy: number): SpawnPoint => ({
+        x: sx - center.x,
+        y: spawnY,
+        z: sy - center.y,
+      });
+      // 4 points per zone: center + three spread within the rect
+      points.push(toWorld(x + w / 2, y + h / 2));
+      points.push(toWorld(x + w * 0.25, y + h * 0.25));
+      points.push(toWorld(x + w * 0.75, y + h * 0.75));
+      points.push(toWorld(x + w * 0.25, y + h * 0.75));
+    }
+
+    this.worldState.spawn.spawnPoints = points.slice(0, count);
+    return this.worldState.spawn.spawnPoints;
   }
 
   /**

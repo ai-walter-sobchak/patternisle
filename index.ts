@@ -35,6 +35,8 @@ import {
 
 import worldMap from './assets/map.json';
 import { WorldState } from './src/server/state/WorldState.js';
+import { generateValidArena } from './src/server/procgen/generateValidArena.js';
+import { specHash } from './src/server/procgen/stableSpec.js';
 
 function logMapBounds(map: any) {
   // Support array of blocks or object keyed by "x,y,z"
@@ -122,10 +124,13 @@ startServer(async world => {
     hud,
   });
 
+  const powerUpSystem = new PowerUpSystem(world, worldState, spawnSystem, hud);
+
   roundController = new RoundController(
     world,
     worldState,
     shardSystem,
+    powerUpSystem,
     objectiveSystem,
     spawnSystem,
     hud,
@@ -139,12 +144,6 @@ startServer(async world => {
     hud,
     scoreService
   );
-
-  const powerUpSystem = new PowerUpSystem(world, worldState, spawnSystem, hud);
-  powerUpSystem.seedInitialSpawns(12);
-
-  // Spawn initial pickups for this match seed.
-  shardSystem.generateAndSpawnPickups(worldState.seed);
 
   // =========================================================
   // Round lifecycle: RoundController is the sole authority (tickMatchLifecycle).
@@ -381,8 +380,41 @@ startServer(async world => {
   });
 
   // --- Debug commands (WorldState) ---
-  world.chatManager.registerCommand('/seed', player => {
-    world.chatManager.sendPlayerMessage(player, `matchId=${worldState.matchId} seed=${worldState.seed}`);
+  const isDev = process.env.NODE_ENV !== 'production' || DEV_MODE;
+
+  world.chatManager.registerCommand('/seed', (player, args) => {
+    const arg = args[0]?.trim();
+    if (!arg) {
+      world.chatManager.sendPlayerMessage(player, `matchId=${worldState.matchId} seed=${worldState.seed}`);
+      return;
+    }
+    // Dev-only: /seed <number> or /seed random — set match seed, generate spec, toast seed + hash
+    if (!isDev) {
+      world.chatManager.sendPlayerMessage(player, `matchId=${worldState.matchId} seed=${worldState.seed}`);
+      return;
+    }
+    const seedStr = arg === 'random' ? `random_${Date.now()}_${Math.floor(Math.random() * 1e6)}` : `seed_${arg}`;
+    const { spec, usedSeed } = generateValidArena(seedStr, 16);
+
+    if (usedSeed.startsWith('fallback')) {
+      console.error('[procgen] fallback used in live match', { seed: seedStr, usedSeed });
+      if (isDev) {
+        console.error('[procgen] hard fail in dev when fallback triggers');
+        process.exit(1);
+      }
+      world.chatManager.sendPlayerMessage(player, `Fallback used for seed ${seedStr}; see server log.`);
+      return;
+    }
+
+    worldState.setMatchId(seedStr);
+    worldState.procgenSpec = spec;
+    shardSystem.regeneratePickups(worldState.seed);
+
+    const hash = specHash(spec).slice(0, 12);
+    const msg = `seed=${seedStr} fallback=no hash=${hash}`;
+    console.log('[procgen] /seed', msg);
+    hud.broadcastToast('info', msg);
+    world.chatManager.sendPlayerMessage(player, msg);
   });
 
   world.chatManager.registerCommand('/state', player => {
