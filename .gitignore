@@ -4,3 +4,5 @@ dist/
 .DS_Store
 .hytopia/
 .cursor/
+index.mjs
+index.js

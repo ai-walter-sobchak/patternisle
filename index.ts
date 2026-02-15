@@ -31,6 +31,7 @@ import {
 } from 'hytopia';
 
 import worldMap from './assets/map.json';
+import { WorldState } from './src/server/state/WorldState.js';
 
 /**
  * startServer is always the entry point for our game.
@@ -43,6 +44,13 @@ import worldMap from './assets/map.json';
  */
 
 startServer(world => {
+  // WorldState: single source of truth for this match (one per server run).
+  const matchId = `match-${world.id}-${Date.now()}`;
+  const worldState = new WorldState(matchId);
+  console.log('[Patternisle] matchId=%s seed=%d', worldState.matchId, worldState.seed);
+
+  const DEV_MODE = false; // Set true to allow /setmatch while players are connected.
+
   /**
    * Enable debug rendering of the physics simulation.
    * This will overlay lines in-game representing colliders,
@@ -77,6 +85,8 @@ startServer(world => {
    * here: https://dev.hytopia.com/sdk-guides/events
    */
   world.on(PlayerEvent.JOINED_WORLD, ({ player }) => {
+    worldState.registerPlayer(player.id);
+
     const playerEntity = new DefaultPlayerEntity({
       player,
       name: 'Player',
@@ -86,6 +96,8 @@ startServer(world => {
 
     // Load our game UI for this player
     player.ui.load('ui/index.html');
+
+    world.chatManager.sendPlayerMessage(player, 'Patternisle connected');
 
     // Send a nice welcome message that only the player who joined will see ;)
     world.chatManager.sendPlayerMessage(player, 'Welcome to the game!', '00FF00');
@@ -111,6 +123,7 @@ startServer(world => {
    * here: https://dev.hytopia.com/sdk-guides/events
    */
   world.on(PlayerEvent.LEFT_WORLD, ({ player }) => {
+    worldState.disconnectPlayer(player.id);
     world.entityManager.getPlayerEntitiesByPlayer(player).forEach(entity => entity.despawn());
   });
 
@@ -135,6 +148,42 @@ startServer(world => {
     world.entityManager.getPlayerEntitiesByPlayer(player).forEach(entity => {
       entity.applyImpulse({ x: 0, y: 20, z: 0 });
     });
+  });
+
+  // --- Debug commands (WorldState) ---
+  world.chatManager.registerCommand('/seed', player => {
+    world.chatManager.sendPlayerMessage(player, `matchId=${worldState.matchId} seed=${worldState.seed}`);
+  });
+
+  world.chatManager.registerCommand('/state', player => {
+    const p = worldState.getPlayer(player.id);
+    if (!p) {
+      world.chatManager.sendPlayerMessage(player, 'Not registered.');
+      return;
+    }
+    const total = worldState.players.size;
+    const techniques = p.unlockedTechniques.length ? p.unlockedTechniques.join(',') : 'none';
+    const stats = `c=${p.stats.creaturesCreated} i=${p.stats.islandsDiscovered} h=${p.stats.hybridsCreated}`;
+    world.chatManager.sendPlayerMessage(
+      player,
+      `players=${total} shards=${p.shards} techniques=${techniques} connected=${p.connected} stats(${stats})`
+    );
+  });
+
+  world.chatManager.registerCommand('/setmatch', (player, args) => {
+    const newId = args[0]?.trim();
+    if (!newId) {
+      world.chatManager.sendPlayerMessage(player, 'Usage: /setmatch <string>');
+      return;
+    }
+    const allowed = DEV_MODE || !worldState.hasConnectedPlayers();
+    if (!allowed) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: players connected. Set DEV_MODE or disconnect all.');
+      return;
+    }
+    worldState.setMatchId(newId);
+    console.log('[Patternisle] setmatch: matchId=%s seed=%d', worldState.matchId, worldState.seed);
+    world.chatManager.sendPlayerMessage(player, `matchId=${worldState.matchId} seed=${worldState.seed}`);
   });
 
   /**
