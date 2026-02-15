@@ -21,7 +21,8 @@ import { ARENA_BOUNDS } from '../config/arenaBounds.js';
 import { ARENA_V1_TIMED_MATCH_ONLY } from '../config/arenaMode.js';
 import { generateValidArena } from '../procgen/generateValidArena.js';
 import { specToMap } from '../procgen/specToMap.js';
-import { generateTheme } from '../procgen/themes.js';
+import { generateTheme, getBlockTypesForIds } from '../procgen/themes.js';
+import { TOWER_MATERIAL_IDS } from './TowerSystem.js';
 import { startSurvival, endSurvival, computeScore } from '../state/survivalState.js';
 import { isInsideObjective } from '../modes/objectiveZone.js';
 import { WaveDirector } from '../modes/survival/WaveDirector.js';
@@ -88,14 +89,22 @@ export class RoundController {
     const r = this.worldState.roundState;
     const nextRoundId = r.roundId == null ? 1 : r.roundId + 1;
     const config = this.worldState.matchConfig;
-    const roundSeed = config.seed + (nextRoundId === 1 ? '' : `_r${nextRoundId}`);
 
+    if (config.mode === 'tower') {
+      this.towerSystem?.clearTowerForNewRound();
+    }
+
+    const roundSeed = config.seed + (nextRoundId === 1 ? '' : `_r${nextRoundId}`);
     const { spec, usedSeed, attempt } = generateValidArena(roundSeed, {
       size: config.size,
       attempts: 16,
     });
     const theme = generateTheme(roundSeed);
     const map = specToMap(spec, theme);
+    if (config.mode === 'tower') {
+      const existingIds = map.blockTypes.map((b) => b.id);
+      map.blockTypes = getBlockTypesForIds([...new Set([...existingIds, ...TOWER_MATERIAL_IDS])]);
+    }
 
     await this.world.loadMap(map);
 
@@ -188,13 +197,19 @@ export class RoundController {
       };
       const roundSeedStr = config.seed + (roundId === 1 ? '' : `_r${roundId}`);
       this.towerSystem?.initRound(roundId, roundSeedStr);
-      const origin = { x: 0, y: 50, z: 0 };
-      const hit = this.world.simulation.raycast(origin, { x: 0, y: -1, z: 0 }, 200);
-      const consoleY = hit ? hit.hitPoint.y + 1 : 1;
-      this.depositSystem?.setConsoleY(consoleY);
+      const spec = this.towerSystem?.getSpec();
+      const radius1 = spec?.radius1 ?? 6;
+      const depositX = radius1 + 2;
+      const depositZ = 0;
+      const originBesideTower = { x: depositX, y: 50, z: depositZ };
+      const hit = this.world.simulation.raycast(originBesideTower, { x: 0, y: -1, z: 0 }, 200);
+      const groundY = hit ? hit.hitPoint.y : 1;
+      this.depositSystem?.setConsoleY(groundY);
+      this.depositSystem?.setConsolePosition(depositX, groundY, depositZ);
       this.depositSystem?.spawnZoneMarker();
     } else {
       this.worldState.towerState = null;
+      this.depositSystem?.clearConsolePosition();
       this.depositSystem?.despawnZoneMarker();
     }
 

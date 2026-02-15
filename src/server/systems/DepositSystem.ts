@@ -8,8 +8,6 @@ import type { TowerSystem } from './TowerSystem.js';
 const CONSOLE_CENTER_X = 0;
 const CONSOLE_CENTER_Z = 0;
 const CONSOLE_RADIUS = 3;
-const DEPOSIT_HOLD_MS = 1500;
-const MOVE_CANCEL_THRESHOLD = 1.5;
 
 const ZONE_HALF_EXTENTS = { x: 3, y: 0.08, z: 3 };
 const ZONE_EMISSIVE_COLOR = { r: 0.3, g: 0.85, b: 1 };
@@ -17,16 +15,12 @@ const ZONE_EMISSIVE_INTENSITY = 4;
 const ZONE_OUTLINE_COLOR = { r: 0.4, g: 0.9, b: 1 };
 const ZONE_OUTLINE_INTENSITY = 2.5;
 
-interface ActiveDeposit {
-  playerId: string;
-  startMs: number;
-  startPos: { x: number; y: number; z: number };
-}
-
 export class DepositSystem {
-  private activeDeposit: ActiveDeposit | null = null;
   private consoleY: number = 0;
+  /** When set (e.g. tower mode), deposit zone is at this position instead of (0, consoleY, 0). */
+  private consolePosition: { x: number; y: number; z: number } | null = null;
   private zoneEntity: Entity | null = null;
+  private wasInZoneByPlayer: Map<string, boolean> = new Map();
 
   constructor(
     private readonly world: World,
@@ -41,6 +35,15 @@ export class DepositSystem {
 
   setConsoleY(y: number): void {
     this.consoleY = y;
+  }
+
+  /** Set full position (e.g. beside tower); clears when set to null. */
+  setConsolePosition(x: number, y: number, z: number): void {
+    this.consolePosition = { x, y, z };
+  }
+
+  clearConsolePosition(): void {
+    this.consolePosition = null;
   }
 
   despawnZoneMarker(): void {
@@ -78,8 +81,11 @@ export class DepositSystem {
   }
 
   getConsolePosition(): { x: number; y: number; z: number } {
+    if (this.consolePosition) return this.consolePosition;
     return { x: CONSOLE_CENTER_X, y: this.consoleY, z: CONSOLE_CENTER_Z };
   }
+
+  cancelDeposit(_playerId: string): void {}
 
   isPlayerInConsoleRange(pos: { x: number; y: number; z: number }): boolean {
     const c = this.getConsolePosition();
@@ -88,100 +94,39 @@ export class DepositSystem {
     return Math.sqrt(dx * dx + dz * dz) <= CONSOLE_RADIUS;
   }
 
-  startDeposit(playerId: string): boolean {
-    if (this.worldState.roundState.status !== 'RUNNING') return false;
-    if (this.worldState.matchConfig.mode !== 'tower') return false;
-    if (this.activeDeposit) return false;
+  tick(_nowMs: number): void {
+    if (this.worldState.roundState.status !== 'RUNNING') return;
+    if (this.worldState.matchConfig.mode !== 'tower') return;
 
-    const player = PlayerManager.instance.getConnectedPlayersByWorld(this.world).find((p) => p.id === playerId);
-    if (!player) return false;
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
+    for (const player of players) {
+      const entities = this.world.entityManager.getPlayerEntitiesByPlayer(player);
+      const entity = entities[0];
+      if (!entity?.isSpawned) continue;
 
-    const entities = this.world.entityManager.getPlayerEntitiesByPlayer(player);
-    const entity = entities[0];
-    if (!entity?.isSpawned) return false;
+      const pos = entity.position;
+      const inZone = this.isPlayerInConsoleRange(pos);
+      const wasInZone = this.wasInZoneByPlayer.get(player.id) ?? false;
 
-    const pos = entity.position;
-    if (!this.isPlayerInConsoleRange(pos)) return false;
+      if (!inZone) {
+        this.wasInZoneByPlayer.set(player.id, false);
+        continue;
+      }
 
-    const p = this.worldState.getPlayer(playerId);
-    if (!p || (p.carriedShards ?? 0) <= 0) return false;
+      this.wasInZoneByPlayer.set(player.id, true);
+      if (wasInZone) continue;
 
-    this.activeDeposit = {
-      playerId,
-      startMs: Date.now(),
-      startPos: { x: pos.x, y: pos.y, z: pos.z },
-    };
-    return true;
-  }
+      const ps = this.worldState.getPlayer(player.id);
+      if (!ps) continue;
+      const carried = ps.carriedShards ?? 0;
+      if (carried <= 0) continue;
 
-  endDeposit(playerId: string): void {
-    if (this.activeDeposit?.playerId === playerId) {
-      this.activeDeposit = null;
+      ps.bankedShards = (ps.bankedShards ?? 0) + carried;
+      ps.carriedShards = 0;
+
+      this.hud.broadcastHud();
+      this.hud.broadcastToast('good', `Deposited ${carried} shards`);
+      this.towerSystem?.checkUnlockThresholds(player.id);
     }
-  }
-
-  cancelDeposit(playerId: string): void {
-    if (this.activeDeposit?.playerId === playerId) {
-      this.activeDeposit = null;
-    }
-  }
-
-  tick(nowMs: number): void {
-    if (!this.activeDeposit) return;
-    if (this.worldState.roundState.status !== 'RUNNING') {
-      this.activeDeposit = null;
-      return;
-    }
-
-    const { playerId, startMs, startPos } = this.activeDeposit;
-    const player = PlayerManager.instance.getConnectedPlayersByWorld(this.world).find((p) => p.id === playerId);
-    if (!player) {
-      this.activeDeposit = null;
-      return;
-    }
-
-    const entities = this.world.entityManager.getPlayerEntitiesByPlayer(player);
-    const entity = entities[0];
-    if (!entity?.isSpawned) {
-      this.activeDeposit = null;
-      return;
-    }
-
-    const pos = entity.position;
-    const dx = pos.x - startPos.x;
-    const dy = pos.y - startPos.y;
-    const dz = pos.z - startPos.z;
-    if (dx * dx + dy * dy + dz * dz > MOVE_CANCEL_THRESHOLD * MOVE_CANCEL_THRESHOLD) {
-      this.activeDeposit = null;
-      return;
-    }
-
-    if (!this.isPlayerInConsoleRange(pos)) {
-      this.activeDeposit = null;
-      return;
-    }
-
-    if (nowMs - startMs < DEPOSIT_HOLD_MS) return;
-
-    const ps = this.worldState.getPlayer(playerId);
-    if (!ps) {
-      this.activeDeposit = null;
-      return;
-    }
-
-    const carried = ps.carriedShards ?? 0;
-    if (carried <= 0) {
-      this.activeDeposit = null;
-      return;
-    }
-
-    ps.bankedShards = (ps.bankedShards ?? 0) + carried;
-    ps.carriedShards = 0;
-
-    this.activeDeposit = null;
-
-    this.hud.broadcastHud();
-    this.hud.broadcastToast('good', `Deposited ${carried} shards`);
-    this.towerSystem?.checkUnlockThresholds(playerId);
   }
 }

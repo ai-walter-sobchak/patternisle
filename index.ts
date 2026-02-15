@@ -113,6 +113,10 @@ startServer(async world => {
   );
 
   const DEV_MODE = false; // Set true to allow /setmatch while players are connected.
+  /** Enable dev cheat commands (/teleport, /moreshards) without full DEV_MODE. Set PATTERNISLE_DEV_CHEATS=1 to test. */
+  const DEV_CHEATS = DEV_MODE || process.env.PATTERNISLE_DEV_CHEATS === '1';
+  /** Players who have run /devcheats in this session can use /teleport and /moreshards. */
+  const devCheatsEnabledPlayerIds = new Set<string>();
 
   console.log('[map] json keys:', Object.keys(worldMap || {}));
   console.log('[map] json size:', JSON.stringify(worldMap || {}).length);
@@ -404,14 +408,6 @@ startServer(async world => {
         combatService.tryMeleeAttack(player);
         return;
       }
-      if (data?.type === 'interact_start' && worldState.matchConfig.mode === 'tower') {
-        depositSystem.startDeposit(player.id);
-        return;
-      }
-      if (data?.type === 'interact_end' && worldState.matchConfig.mode === 'tower') {
-        depositSystem.endDeposit(player.id);
-        return;
-      }
       // Lobby: mode selection and start (only when round is in LOBBY)
       if (worldState.roundState.status === 'LOBBY') {
         if (data?.type === 'set_mode' && typeof data.mode === 'string') {
@@ -450,6 +446,7 @@ startServer(async world => {
    */
   world.on(PlayerEvent.LEFT_WORLD, ({ player }) => {
     worldState.disconnectPlayer(player.id);
+    devCheatsEnabledPlayerIds.delete(player.id);
     world.entityManager.getPlayerEntitiesByPlayer(player).forEach(entity => entity.despawn());
   });
 
@@ -649,10 +646,18 @@ startServer(async world => {
     );
   });
 
+  /** Turn on dev cheats for yourself so you can use /teleport and /moreshards (no server restart needed). */
+  world.chatManager.registerCommand('/devcheats', player => {
+    devCheatsEnabledPlayerIds.add(player.id);
+    world.chatManager.sendPlayerMessage(player, 'Dev cheats enabled. You can use /teleport, /moreshards, and /tier.', '00FF00');
+  });
+
+  const canUseDevCheats = (playerId: string) => DEV_CHEATS || devCheatsEnabledPlayerIds.has(playerId);
+
   /** Dev: teleport to arena center (shard drop zone). */
   world.chatManager.registerCommand('/teleport', player => {
-    if (!DEV_MODE) {
-      world.chatManager.sendPlayerMessage(player, 'Refused: /teleport is DEV_MODE only.');
+    if (!canUseDevCheats(player.id)) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: use /devcheats first to enable cheat commands.');
       return;
     }
     const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
@@ -673,8 +678,8 @@ startServer(async world => {
 
   /** Dev: add shards so you have enough for the next tier (or TARGET_SHARDS in non-tower). */
   world.chatManager.registerCommand('/moreshards', player => {
-    if (!DEV_MODE) {
-      world.chatManager.sendPlayerMessage(player, 'Refused: /moreshards is DEV_MODE only.');
+    if (!canUseDevCheats(player.id)) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: use /devcheats first to enable cheat commands.');
       return;
     }
     const p = worldState.getPlayer(player.id);
@@ -705,6 +710,26 @@ startServer(async world => {
       world.chatManager.sendPlayerMessage(player, `+${need} shards (next tier / target).`, '00FF00');
     } else {
       world.chatManager.sendPlayerMessage(player, 'You already have enough shards for the next tier.');
+    }
+  });
+
+  /** Dev: build the next tier of the tower (tower mode only). */
+  world.chatManager.registerCommand('/tier', player => {
+    if (!canUseDevCheats(player.id)) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: use /devcheats first to enable cheat commands.');
+      return;
+    }
+    const built = towerSystem.unlockAndBuildNextTier();
+    if (built) {
+      world.chatManager.sendPlayerMessage(player, 'Next tower tier built.', '00FF00');
+    } else {
+      const mode = worldState.matchConfig.mode;
+      const ts = worldState.towerState;
+      if (mode !== 'tower' || !ts) {
+        world.chatManager.sendPlayerMessage(player, 'Tower mode only. Current mode: ' + (mode ?? 'unknown') + '.');
+      } else {
+        world.chatManager.sendPlayerMessage(player, 'Tower is already at max tier (3).');
+      }
     }
   });
 

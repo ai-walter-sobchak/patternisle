@@ -304,7 +304,7 @@
 
     if (isTower) {
       labelEl.textContent = carried + ' carried \u2022 ' + banked + ' banked';
-      var depositHint = 'Stand on the platform \u2022 Hold E to deposit';
+      var depositHint = 'Walk onto the platform to deposit';
       if (state.roofActive && state.roofHoldTargetMs) {
         const sec = Math.floor((state.roofHoldMs || 0) / 1000);
         const totalSec = Math.floor(state.roofHoldTargetMs / 1000);

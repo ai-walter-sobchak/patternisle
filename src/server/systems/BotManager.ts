@@ -115,11 +115,13 @@ export class BotManager {
 
     this.startAiLoop();
 
-    if (BOT_DEBUG_LOGS) {
-      const names = this.bots.map(b => b.displayName).join(', ');
-      console.log(`[BotManager] spawned ${count} bots: ${names}`);
+    if (count > 0) {
+      if (BOT_DEBUG_LOGS) {
+        const names = this.bots.map(b => b.displayName).join(', ');
+        console.log(`[BotManager] spawned ${count} bots: ${names}`);
+      }
+      this.options.hud.broadcastFeed(`Bots joined the arena: ${this.bots.map(b => b.displayName).join(', ')}`);
     }
-    this.options.hud.broadcastFeed(`Bots joined the arena: ${this.bots.map(b => b.displayName).join(', ')}`);
   }
 
   /** Called when round ends (ENDED/RESETTING): despawn bots, stop loop, update scaling. */

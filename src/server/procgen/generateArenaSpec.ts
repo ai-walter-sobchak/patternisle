@@ -99,9 +99,9 @@ export function generateArenaSpec(seed: string, opts: Opts = {}): MapSpecV1 {
   }
   const innerR = ringRadii[ringRadii.length - 1];
 
-  // More segments and spokes = more maze corridors and winding paths
-  const segments = rng.int(24, 36);
-  const spokes = rng.int(6, 12);
+  // More segments and spokes = more maze corridors leading to center
+  const segments = rng.int(28, 40);
+  const spokes = rng.int(8, 14);
 
   // 2–3 blocks: thick enough for corridors but gates stay open for connectivity
   const wallThickness = rng.int(2, 3);
@@ -143,8 +143,22 @@ export function generateArenaSpec(seed: string, opts: Opts = {}): MapSpecV1 {
     const p0 = polar(center, startR, a);
     const p1 = polar(center, endR, a);
 
-    // More often add a choke so you have to wind around
-    if (rng.bool(0.5)) {
+    // Often add one or two chokes so you have to wind around to reach center
+    const oneChoke = rng.bool(0.65);
+    const twoChokes = oneChoke && rng.bool(0.35); // two gaps = three segments on this spoke
+    if (twoChokes) {
+      const midR1 = startR + (endR - startR) * (0.35 + rng.int(0, 15) / 100);
+      const midR2 = startR + (endR - startR) * (0.6 + rng.int(0, 15) / 100);
+      const gap1 = rng.int(5, 10);
+      const gap2 = rng.int(5, 10);
+      const pA0 = polar(center, midR1 - gap1 / 2, a);
+      const pA1 = polar(center, midR1 + gap1 / 2, a);
+      const pB0 = polar(center, midR2 - gap2 / 2, a);
+      const pB1 = polar(center, midR2 + gap2 / 2, a);
+      wallSegments.push({ a: p0, b: pA0, thickness: wallThickness, tag: "spoke" });
+      wallSegments.push({ a: pA1, b: pB0, thickness: wallThickness, tag: "spoke" });
+      wallSegments.push({ a: pB1, b: p1, thickness: wallThickness, tag: "spoke" });
+    } else if (oneChoke) {
       const midR = (startR + endR) / 2;
       const gap = rng.int(6, 12);
       const pA = polar(center, midR + gap / 2, a);
@@ -160,14 +174,29 @@ export function generateArenaSpec(seed: string, opts: Opts = {}): MapSpecV1 {
   const objectiveRadius = rng.int(6, 10); // blocks
   const objective = { center, radius: objectiveRadius };
 
-  // Inner maze: short radial walls inside the innermost ring (don't reach center) for extra winding
-  const innerMazeSpokes = rng.int(3, 6);
-  const innerMazeAngles = rng.shuffle([0, 45, 90, 135, 180, 225, 270, 315]).slice(0, innerMazeSpokes);
+  // Inner maze layer 1: radial walls just inside innermost ring — first barrier before center
+  const innerMazeSpokes = rng.int(5, 9);
+  const allAngles = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
+  const innerMazeAngles = rng.shuffle([...allAngles]).slice(0, innerMazeSpokes);
   for (const a of innerMazeAngles) {
-    const aDeg = (a + rng.int(-12, 12) + 360) % 360;
+    const aDeg = (a + rng.int(-10, 10) + 360) % 360;
     const startR = innerR - rng.int(2, 4);
-    const endR = innerR - rng.int(6, 11);
+    const endR = innerR - rng.int(6, 12);
     if (endR < objectiveRadius + 5) continue;
+    const p0 = polar(center, startR, aDeg);
+    const p1 = polar(center, endR, aDeg);
+    wallSegments.push({ a: p0, b: p1, thickness: wallThickness, tag: "spoke" });
+  }
+
+  // Inner maze layer 2: another ring of short radial walls closer to center — more corridors to navigate
+  const innerMaze2Spokes = rng.int(4, 8);
+  const innerMaze2Angles = rng.shuffle([...allAngles]).slice(0, innerMaze2Spokes);
+  const midInnerR = innerR - rng.int(8, 14); // band between layer 1 and objective
+  for (const a of innerMaze2Angles) {
+    const aDeg = (a + rng.int(-8, 8) + 360) % 360;
+    const startR = midInnerR + rng.int(2, 5);
+    const endR = midInnerR - rng.int(4, 9);
+    if (endR < objectiveRadius + 4) continue;
     const p0 = polar(center, startR, aDeg);
     const p1 = polar(center, endR, aDeg);
     wallSegments.push({ a: p0, b: p1, thickness: wallThickness, tag: "spoke" });
