@@ -1,5 +1,9 @@
 # Phase 3: Shard Pickups
 
+## Deterministic pickup IDs
+
+Pickup IDs are **deterministic**: `shard-0`, `shard-1`, … `shard-<index>`. No random strings. This keeps replication and debugging consistent across server and clients.
+
 ## RNG choice (Mulberry32)
 
 We use **Mulberry32** for deterministic placement:
@@ -18,7 +22,7 @@ We use **Mulberry32** for deterministic placement:
    - `shardSystem.generateAndSpawnPickups(worldState.seed)` runs once to spawn pickups for the match.
 2. Each world tick:
    - `world.loop.on(WorldLoopEvent.TICK_START, ({ tickDeltaMs }) => { shardSystem.tick(tickDeltaMs); });`
-   - So every tick, `ShardSystem.tick(dt)` runs: it checks connected players vs uncollected pickups, applies proximity pickup, updates `WorldState` and chat, and despawns the entity.
+   - So every tick, `ShardSystem.tick(dt)` runs: it checks connected players vs uncollected pickups (with a cheap AABB early-out using `scanRadius` so we don’t do a full O(players × pickups) distance check), applies proximity pickup, updates `WorldState` and chat, and despawns the entity.
 
 ## Manual test checklist
 
@@ -31,3 +35,4 @@ We use **Mulberry32** for deterministic placement:
 - [ ] **Anti-dupe**: Same pickup never awards twice; after collect it stays gone.
 - [ ] **Multiplayer**: Second client joins; when one player collects a shard, it disappears for both. No double-award.
 - [ ] **/spawnshards (DEV_MODE only)**: Set `DEV_MODE = true` in index.ts, restart. `/spawnshards` regenerates pickups; without DEV_MODE the command is refused.
+- [ ] **Regen safety**: Calling `regeneratePickups(seed)` multiple times despawns all existing shard entities, clears the map, resets the spawned flag, and respawns; no entity leaks.

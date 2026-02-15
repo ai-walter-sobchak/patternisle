@@ -14,6 +14,8 @@ export interface ShardSystemConfig {
   radius: number;
   minSpacing: number;
   pickupRadius: number;
+  /** Half-extent of per-player scan box (skip pickups outside this AABB). Defaults to pickupRadius. */
+  scanRadius: number;
 }
 
 const DEFAULT_CONFIG: ShardSystemConfig = {
@@ -21,6 +23,7 @@ const DEFAULT_CONFIG: ShardSystemConfig = {
   radius: 20,
   minSpacing: 3,
   pickupRadius: 2.5,
+  scanRadius: 2.5,
 };
 
 function sqDist(
@@ -75,7 +78,7 @@ export class ShardSystem {
     for (let i = 0; i < positions.length; i++) {
       const pos = positions[i];
       const value = 1 + Math.floor(rng() * 5);
-      const id = `shard-${i}`;
+      const id = `shard-${i}`; // deterministic for replication/debugging
       const entity = createShardPickupEntity(this.world, pos);
       const state: ShardPickupState = {
         id,
@@ -90,6 +93,7 @@ export class ShardSystem {
 
   /**
    * Regenerate and spawn pickups (clears existing). For DEV_MODE only.
+   * Despawns any existing entities, clears the map, resets spawned flag so repeated calls do not leak entities.
    */
   regeneratePickups(seed: number): void {
     this.clearPickups();
@@ -99,19 +103,21 @@ export class ShardSystem {
 
   private clearPickups(): void {
     for (const state of this.pickups.values()) {
-      if (state.entity?.isSpawned) state.entity.despawn();
+      if (state.entity) state.entity.despawn();
     }
     this.pickups.clear();
   }
 
   /**
    * Per-tick: proximity check for all connected players; collect once, despawn, update WorldState, chat.
+   * Uses a cheap AABB early-out (scanRadius) so we only run sqDist for pickups inside the player's scan box.
    */
   tick(_dtMs: number): void {
     const players = this.world.playerManager.getConnectedPlayersByWorld(
       this.world
     );
     const pickupRadiusSq = this.config.pickupRadius * this.config.pickupRadius;
+    const scanRadius = this.config.scanRadius;
 
     for (const player of players) {
       const entities = this.world.entityManager.getPlayerEntitiesByPlayer(
@@ -123,12 +129,16 @@ export class ShardSystem {
 
       for (const state of this.pickups.values()) {
         if (state.collected) continue;
+        if (
+          Math.abs(playerPos.x - state.pos.x) > scanRadius ||
+          Math.abs(playerPos.y - state.pos.y) > scanRadius ||
+          Math.abs(playerPos.z - state.pos.z) > scanRadius
+        )
+          continue;
         if (sqDist(playerPos, state.pos) > pickupRadiusSq) continue;
 
         state.collected = true;
-        if (state.entity?.isSpawned) {
-          state.entity.despawn();
-        }
+        if (state.entity) state.entity.despawn();
         state.entity = undefined;
 
         const p = this.worldState.getPlayer(player.id);
