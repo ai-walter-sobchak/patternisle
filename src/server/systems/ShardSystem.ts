@@ -4,6 +4,7 @@
  */
 
 import type { World } from 'hytopia';
+import { PlayerManager } from 'hytopia';
 import { createDeterministicRng } from '../utils/deterministicRng.js';
 import type { ShardPickupState } from '../entities/ShardPickup.js';
 import { createShardPickupEntity } from '../entities/ShardPickup.js';
@@ -62,11 +63,24 @@ export class ShardSystem {
     const maxAttempts = count * 200;
     let attempts = 0;
 
+    const RAYCAST_START_Y = 100;
+    const RAYCAST_LENGTH = 150;
+    const GROUND_OFFSET = 0.6;
+    const FALLBACK_Y = 2;
+    const DOWN = { x: 0, y: -1, z: 0 };
+
     while (positions.length < count && attempts < maxAttempts) {
       attempts++;
       const x = center.x + (rng() * 2 - 1) * radius;
       const z = center.z + (rng() * 2 - 1) * radius;
-      const y = center.y + (rng() * 2 - 1) * (radius * 0.3);
+      rng(); // keep RNG sequence unchanged (was used for y)
+      const origin = { x, y: RAYCAST_START_Y, z };
+      const hit = this.world.simulation.raycast(
+        origin,
+        DOWN,
+        RAYCAST_LENGTH
+      );
+      const y = hit ? hit.hitPoint.y + GROUND_OFFSET : FALLBACK_Y;
       const pos = { x, y, z };
 
       const tooClose = positions.some(p => sqDist(p, pos) < minSq);
@@ -113,7 +127,7 @@ export class ShardSystem {
    * Uses a cheap AABB early-out (scanRadius) so we only run sqDist for pickups inside the player's scan box.
    */
   tick(_dtMs: number): void {
-    const players = this.world.playerManager.getConnectedPlayersByWorld(
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(
       this.world
     );
     const pickupRadiusSq = this.config.pickupRadius * this.config.pickupRadius;
