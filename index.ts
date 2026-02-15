@@ -28,10 +28,12 @@ import {
   Audio,
   DefaultPlayerEntity,
   PlayerEvent,
+  WorldLoopEvent,
 } from 'hytopia';
 
 import worldMap from './assets/map.json';
 import { WorldState } from './src/server/state/WorldState.js';
+import { ShardSystem } from './src/server/systems/ShardSystem.js';
 
 /**
  * startServer is always the entry point for our game.
@@ -71,6 +73,13 @@ startServer(world => {
    * the assets folder as map.json.
    */
   world.loadMap(worldMap);
+
+  const shardSystem = new ShardSystem(world, worldState);
+  shardSystem.generateAndSpawnPickups(worldState.seed);
+
+  world.loop.on(WorldLoopEvent.TICK_START, ({ tickDeltaMs }) => {
+    shardSystem.tick(tickDeltaMs);
+  });
 
   /**
    * Handle player joining the game. The PlayerEvent.JOINED_WORLD
@@ -182,8 +191,28 @@ startServer(world => {
       return;
     }
     worldState.setMatchId(newId);
+    shardSystem.regeneratePickups(worldState.seed);
     console.log('[Patternisle] setmatch: matchId=%s seed=%d', worldState.matchId, worldState.seed);
     world.chatManager.sendPlayerMessage(player, `matchId=${worldState.matchId} seed=${worldState.seed}`);
+  });
+
+  world.chatManager.registerCommand('/shards', player => {
+    const remaining = shardSystem.getRemainingCount();
+    const p = worldState.getPlayer(player.id);
+    const total = p?.shards ?? 0;
+    world.chatManager.sendPlayerMessage(
+      player,
+      `Shards: ${total} (you). Remaining pickups: ${remaining}`
+    );
+  });
+
+  world.chatManager.registerCommand('/spawnshards', player => {
+    if (!DEV_MODE) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: /spawnshards is DEV_MODE only.');
+      return;
+    }
+    shardSystem.regeneratePickups(worldState.seed);
+    world.chatManager.sendPlayerMessage(player, `Regenerated ${shardSystem.pickups.size} shard pickups.`);
   });
 
   /**
