@@ -90,13 +90,22 @@ import { SpawnSystem } from './src/server/systems/SpawnSystem.js';
 import { PowerUpSystem } from './src/server/systems/PowerUpSystem.js';
 import { RoundController, TARGET_SHARDS } from './src/server/systems/RoundController.js';
 import { RoundManager } from './src/server/systems/RoundManager.js';
+import { DEFAULT_MATCH_CONFIG } from './src/server/state/matchConfig.js';
 
 startServer(async world => {
   // WorldState: single source of truth for this match (one per server run).
   const matchId = `match-${world.id}-${Date.now()}`;
   const worldState = new WorldState(matchId);
   worldState.mapData = worldMap;
-  console.log('[Patternisle] matchId=%s seed=%d', worldState.matchId, worldState.seed);
+  worldState.matchConfig = { ...DEFAULT_MATCH_CONFIG, seed: matchId };
+  console.log(
+    '[Patternisle] matchId=%s seed=%d mode=%s configSeed=%s size=%d',
+    worldState.matchId,
+    worldState.seed,
+    worldState.matchConfig.mode,
+    worldState.matchConfig.seed,
+    worldState.matchConfig.size
+  );
 
   const DEV_MODE = false; // Set true to allow /setmatch while players are connected.
 
@@ -283,6 +292,34 @@ startServer(async world => {
   const OBJECTIVE_RESPAWN_INTERVAL_MS = 250;
   const FALL_RECOVERY_COOLDOWN_MS = 2000;
   const VOID_Y = -20;
+  const OBJECTIVE_TICK_MS = 100; // 10hz for survival/timetrial
+  const BOUNDARY_DAMAGE_THROTTLE_MS = 1000;
+  let lastBoundaryDamageMs = 0;
+
+  setInterval(() => {
+    const now = Date.now();
+    roundController.tickObjectiveAndModes(now);
+
+    if (
+      worldState.matchConfig.mode === 'timetrial' &&
+      worldState.roundState.status === 'RUNNING' &&
+      worldState.timeTrialState.status === 'RUNNING'
+    ) {
+      const connected = PlayerManager.instance.getConnectedPlayersByWorld(world);
+      for (const player of connected) {
+        const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
+        const entity = entities[0];
+        if (!entity?.isSpawned) continue;
+        const pos = entity.position;
+        if (roundController.isOutsideTimeTrialSafeRadius(now, { x: pos.x, z: pos.z })) {
+          if (now - lastBoundaryDamageMs >= BOUNDARY_DAMAGE_THROTTLE_MS) {
+            lastBoundaryDamageMs = now;
+            combatService.damage(player.id, 'boundary', 15, 'boundary');
+          }
+        }
+      }
+    }
+  }, OBJECTIVE_TICK_MS);
 
   setInterval(() => {
     objectiveSystem.tickRespawn();
@@ -478,6 +515,27 @@ startServer(async world => {
         'Cannot claim: get within range of the Golden Apple and try again.'
       );
     }
+  });
+
+  world.chatManager.registerCommand('/restart', player => {
+    const ok = roundController.handleRestartRequest();
+    if (ok) {
+      world.chatManager.sendPlayerMessage(player, 'Restarting match...');
+    } else {
+      world.chatManager.sendPlayerMessage(
+        player,
+        'Can only restart when survival or timetrial has ended (status=ENDED).'
+      );
+    }
+  });
+
+  world.chatManager.registerCommand('/killenemy', player => {
+    if (worldState.matchConfig.mode !== 'survival') {
+      world.chatManager.sendPlayerMessage(player, 'Only in survival mode.');
+      return;
+    }
+    (roundController as { onEnemyDeath?: () => void }).onEnemyDeath?.();
+    world.chatManager.sendPlayerMessage(player, 'Enemy killed (test).');
   });
 
   world.chatManager.registerCommand('/round', player => {

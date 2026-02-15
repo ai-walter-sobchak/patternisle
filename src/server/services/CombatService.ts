@@ -75,15 +75,26 @@ export class CombatService {
   }
 
   private handleKO(victimId: string, attackerId: string): void {
+    if (this.worldState.matchConfig.mode === 'survival') {
+      (this.roundController as { onSurvivalPlayerDeath?: () => void }).onSurvivalPlayerDeath?.();
+      return;
+    }
+
     const attackerName = this.getPlayerDisplayName(attackerId);
     const victimName = this.getPlayerDisplayName(victimId);
+    const isEnvironment = attackerId === 'boundary' || attackerId === 'hazard';
 
-    this.scoreService.addPoint(attackerId, attackerName, 1, 'kill');
-    this.hudService.broadcastToast(
-      'info',
-      `${attackerName} eliminated ${victimName} +1`
-    );
-    this.hudService.broadcastFeed(`${attackerName} eliminated ${victimName}`);
+    if (!isEnvironment) {
+      this.scoreService.addPoint(attackerId, attackerName, 1, 'kill');
+    }
+    const toastMsg = isEnvironment
+      ? `${victimName} took hazard damage`
+      : `${attackerName} eliminated ${victimName} +1`;
+    const feedMsg = isEnvironment
+      ? `${victimName} fell to the hazard`
+      : `${attackerName} eliminated ${victimName}`;
+    this.hudService.broadcastToast('info', toastMsg);
+    this.hudService.broadcastFeed(feedMsg);
     this.hudService.broadcastHud();
 
     const victimState = this.worldState.getPlayer(victimId);

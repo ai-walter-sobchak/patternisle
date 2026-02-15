@@ -3,9 +3,11 @@
  * Only send on state changes; no per-tick spam.
  */
 
+import type { GameMode } from '../modes/types.js';
+
 export const HUD_MESSAGE_VERSION = 1;
 
-export type HudRoundStatus = 'LOBBY' | 'RUNNING' | 'ENDED' | 'RESETTING';
+export type HudRoundStatus = 'LOBBY' | 'STARTING' | 'RUNNING' | 'ENDED' | 'RESETTING';
 
 /** Objective snippet for HUD (Golden Apple). */
 export interface HudObjectivePayload {
@@ -45,6 +47,18 @@ export interface HudMessage {
   ambientScore?: number;
   /** Active power-up effects with expiry (sent only to that player). */
   effects?: Array<{ kind: string; expiresAtMs: number }>;
+  /** Current game mode (shared). */
+  mode?: GameMode;
+  /** Elapsed match time in ms (for timer display). */
+  timerMs?: number;
+  /** Mode-specific score (survival/timetrial). */
+  score?: number;
+  /** Survival: current wave number. */
+  wave?: number;
+  /** Survival: enemies remaining this wave. */
+  enemiesRemaining?: number;
+  /** Time Trial: capture progress 0–100. */
+  captureProgressPercent?: number;
 }
 
 export interface ToastMessage {

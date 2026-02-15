@@ -35,6 +35,7 @@ export class HudService {
   sendHud(player: Player, extras?: HudExtras): void {
     const r = this.worldState.roundState;
     const p = this.worldState.getPlayer(player.id);
+    const config = this.worldState.matchConfig;
 
     // Single source of truth
     const shards = p?.shards ?? 0;
@@ -54,6 +55,24 @@ export class HudService {
     if (health !== undefined) msg.health = health;
     msg.ambientScore = p?.ambientScore ?? 0;
     msg.effects = (p?.effects ?? []).map(e => ({ kind: e.kind, expiresAtMs: e.expiresAtMs }));
+
+    msg.mode = config.mode;
+    if (config.mode === 'survival') {
+      const surv = this.worldState.survivalState;
+      msg.timerMs = surv.status === 'RUNNING' ? surv.elapsedMs : 0;
+      msg.score = surv.status === 'ENDED' ? surv.score : Math.floor(surv.elapsedMs / 1000) + surv.wave * 25 + surv.kills * 10 + Math.floor(surv.inObjectiveMs / 1000) * 2;
+      msg.wave = surv.wave;
+      msg.enemiesRemaining = surv.enemiesRemaining;
+    } else if (config.mode === 'timetrial') {
+      const tt = this.worldState.timeTrialState;
+      msg.timerMs = tt.status === 'RUNNING' ? Date.now() - tt.startedAtMs : 0;
+      msg.captureProgressPercent = tt.requiredCaptureMs > 0
+        ? Math.min(100, Math.floor((tt.captureMs / tt.requiredCaptureMs) * 100))
+        : 0;
+      if (tt.status === 'ENDED') {
+        msg.score = Math.max(0, 300000 - (Date.now() - tt.startedAtMs));
+      }
+    }
 
     if (r.winnerPlayerId != null) {
       // Winner display name from score store if present, else live player display name, else id.

@@ -19,11 +19,17 @@ import { ARENA_V1_TIMED_MATCH_ONLY } from '../config/arenaMode.js';
 import { generateValidArena } from '../procgen/generateValidArena.js';
 import { specToMap } from '../procgen/specToMap.js';
 import { generateTheme } from '../procgen/themes.js';
+import { startSurvival, endSurvival, computeScore } from '../state/survivalState.js';
+import { isInsideObjective } from '../modes/objectiveZone.js';
+import { WaveDirector } from '../modes/survival/WaveDirector.js';
+import { INITIAL_SURVIVAL_STATE, type SurvivalState } from '../state/survivalState.js';
+import { INITIAL_TIME_TRIAL_STATE } from '../state/timeTrialState.js';
 
 export { TARGET_SHARDS };
 
 const ROUND_RESET_DELAY_MS = 8000;
 const POWERUP_SPAWN_COUNT = 12;
+const OBJECTIVE_TICK_MS = 100; // 10hz
 
 /** Numeric seed for this round so shards and powerups get new positions every round. */
 function roundSeedNumeric(baseSeed: number, roundId: number): number {
@@ -32,6 +38,9 @@ function roundSeedNumeric(baseSeed: number, roundId: number): number {
 
 export class RoundController {
   private startMatchInProgress = false;
+  private waveDirector: WaveDirector | null = null;
+  private lastObjectiveTickMs = 0;
+  private lastHeartbeatSec = 0;
 
   constructor(
     private readonly world: World,
@@ -72,9 +81,13 @@ export class RoundController {
   private async startMatchAsync(): Promise<void> {
     const r = this.worldState.roundState;
     const nextRoundId = r.roundId == null ? 1 : r.roundId + 1;
-    const roundSeed = `${this.worldState.matchId}_r${nextRoundId}`;
+    const config = this.worldState.matchConfig;
+    const roundSeed = config.seed + (nextRoundId === 1 ? '' : `_r${nextRoundId}`);
 
-    const { spec, usedSeed } = generateValidArena(roundSeed, 16);
+    const { spec, usedSeed, attempt } = generateValidArena(roundSeed, {
+      size: config.size,
+      attempts: 16,
+    });
     const theme = generateTheme(roundSeed);
     const map = specToMap(spec, theme);
 
@@ -82,8 +95,23 @@ export class RoundController {
 
     this.worldState.mapData = map;
     this.worldState.procgenSpec = spec;
+    this.worldState.mapSpec = spec;
+    this.worldState.usedSeed = usedSeed;
+    this.worldState.procgenAttempt = attempt;
     this.worldState.spawn.spawnPoints = [];
     this.worldState.spawn.lastSpawnIndexByPlayerId = {};
+
+    const walls = spec.wallSegments?.length ?? 0;
+    const cover = spec.cover?.length ?? 0;
+    console.log(
+      '[procgen] mode=%s seed=%s usedSeed=%s attempt=%s walls=%s cover=%s',
+      config.mode,
+      config.seed,
+      usedSeed,
+      attempt,
+      walls,
+      cover
+    );
 
     if (usedSeed.startsWith('fallback')) {
       console.warn('[RoundController] round used fallback spec', { roundSeed, usedSeed });
@@ -96,9 +124,16 @@ export class RoundController {
   private finishStartMatch(roundId: number): void {
     const now = Date.now();
     const r = this.worldState.roundState;
+    const config = this.worldState.matchConfig;
 
     r.status = 'RUNNING';
     r.roundId = roundId;
+    r.matchDurationMs =
+      config.mode === 'survival'
+        ? config.survival.winSeconds * 1000
+        : config.mode === 'timetrial'
+          ? 600000
+          : r.matchDurationMs;
     r.matchEndsAtMs = now + r.matchDurationMs;
     r.resetEndsAtMs = undefined;
     r.winnerPlayerId = undefined;
@@ -111,6 +146,29 @@ export class RoundController {
 
     this.scoreService.resetForPlayers(players);
     this.worldState.resetAllPlayerShards();
+
+    this.waveDirector = null;
+    this.lastObjectiveTickMs = now;
+    this.lastHeartbeatSec = 0;
+
+    if (config.mode === 'survival') {
+      startSurvival(this.worldState.survivalState, now);
+      this.waveDirector = new WaveDirector(
+        this.worldState.mapSpec,
+        this.worldState.usedSeed,
+        config.survival.interWaveDelayMs,
+        () => this.onWaveCleared(),
+        (wave) => this.onWaveStart(wave)
+      );
+      this.waveDirector.start(now);
+    } else if (config.mode === 'timetrial') {
+      this.worldState.timeTrialState = {
+        ...INITIAL_TIME_TRIAL_STATE,
+        status: 'RUNNING',
+        startedAtMs: now,
+        requiredCaptureMs: config.timetrial.requiredCaptureMs,
+      };
+    }
 
     const seedForRound = roundSeedNumeric(this.worldState.seed, roundId);
     this.shardSystem.resetForNewMatch(seedForRound);
@@ -132,9 +190,177 @@ export class RoundController {
     this.hud.broadcastHud();
   }
 
+  private onWaveCleared(): void {
+    const surv = this.worldState.survivalState;
+    surv.wave = this.waveDirector?.currentWave ?? surv.wave;
+    this.hud.broadcastToast('good', `Wave ${surv.wave} cleared`);
+    this.hud.broadcastFeed(`Wave ${surv.wave} cleared`);
+    this.hud.broadcastHud();
+  }
+
+  private onWaveStart(wave: number): void {
+    this.worldState.survivalState.wave = wave;
+    this.hud.broadcastToast('info', `Wave ${wave}`);
+    this.hud.broadcastHud();
+  }
+
+  /**
+   * Call at 10hz from index. Updates survival/timetrial objective time and wave director; checks end conditions.
+   */
+  tickObjectiveAndModes(nowMs: number): void {
+    if (nowMs - this.lastObjectiveTickMs < OBJECTIVE_TICK_MS) return;
+    const delta = nowMs - this.lastObjectiveTickMs;
+    this.lastObjectiveTickMs = nowMs;
+
+    const config = this.worldState.matchConfig;
+    const r = this.worldState.roundState;
+    if (r.status !== 'RUNNING') return;
+
+    const firstPlayerPos = this.getFirstConnectedPlayerPosition();
+    const insideObjective = firstPlayerPos
+      ? isInsideObjective(this.worldState.mapSpec, firstPlayerPos)
+      : false;
+
+    if (config.mode === 'survival') {
+      const surv = this.worldState.survivalState;
+      if (surv.status !== 'RUNNING') return;
+      surv.elapsedMs = nowMs - surv.startedAtMs;
+      if (insideObjective) surv.inObjectiveMs += delta;
+      surv.lastTickMs = nowMs;
+
+      this.waveDirector?.update(nowMs);
+      surv.wave = this.waveDirector?.currentWave ?? surv.wave;
+      surv.enemiesRemaining = this.waveDirector?.liveEnemies ?? 0;
+
+      const winByWaves = surv.wave >= config.survival.winWaves;
+      const winByTime = surv.elapsedMs >= config.survival.winSeconds * 1000;
+      if (winByWaves || winByTime) {
+        this.endSurvivalMatch(true);
+        return;
+      }
+
+      const sec = Math.floor(surv.elapsedMs / 1000);
+      if (sec > this.lastHeartbeatSec) {
+        this.lastHeartbeatSec = sec;
+        this.hud.broadcastHud();
+      }
+    } else if (config.mode === 'timetrial') {
+      const tt = this.worldState.timeTrialState;
+      if (tt.status !== 'RUNNING') return;
+      if (insideObjective) tt.captureMs += delta;
+
+      if (tt.captureMs >= tt.requiredCaptureMs) {
+        this.endTimeTrialMatch();
+        return;
+      }
+
+      const sec = Math.floor((nowMs - tt.startedAtMs) / 1000);
+      if (sec > this.lastHeartbeatSec) {
+        this.lastHeartbeatSec = sec;
+        this.hud.broadcastHud();
+      }
+    }
+  }
+
+  private getFirstConnectedPlayerPosition(): { x: number; y: number; z: number } | null {
+    const connected = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
+    for (const player of connected) {
+      const entities = this.world.entityManager.getPlayerEntitiesByPlayer(player);
+      const entity = entities[0];
+      if (entity?.isSpawned) {
+        const p = entity.position;
+        return { x: p.x, y: p.y, z: p.z };
+      }
+    }
+    return null;
+  }
+
+  /** Called when the solo player is KO'd in survival mode (lose). */
+  onSurvivalPlayerDeath(): void {
+    this.endSurvivalMatch(false);
+  }
+
+  private endSurvivalMatch(won: boolean): void {
+    const now = Date.now();
+    const surv = this.worldState.survivalState;
+    endSurvival(surv, now);
+    this.waveDirector = null;
+
+    const score = computeScore(surv);
+    this.hud.broadcastToast(won ? 'good' : 'bad', won ? `You win! Score: ${score}` : `You died. Score: ${score}`);
+    this.hud.broadcastFeed(won ? `Survival win! Score: ${score}` : `Survival ended. Score: ${score}`);
+    this.hud.broadcastHud();
+
+    this.worldState.roundState.status = 'ENDED';
+    this.worldState.roundState.resetEndsAtMs = now + ROUND_RESET_DELAY_MS;
+  }
+
+  private endTimeTrialMatch(): void {
+    const now = Date.now();
+    const tt = this.worldState.timeTrialState;
+    tt.status = 'ENDED';
+    const totalTimeMs = now - tt.startedAtMs;
+    const score = Math.max(0, 300000 - totalTimeMs);
+    this.hud.broadcastToast('good', `Time Trial complete! Score: ${score}`);
+    this.hud.broadcastFeed(`Time Trial complete in ${(totalTimeMs / 1000).toFixed(1)}s. Score: ${score}`);
+    this.hud.broadcastHud();
+
+    this.worldState.roundState.status = 'ENDED';
+    this.worldState.roundState.resetEndsAtMs = now + ROUND_RESET_DELAY_MS;
+  }
+
+  /** Call when an enemy entity dies (e.g. from NPC system). Increments survivalState.kills and wave director. */
+  onEnemyDeath(): void {
+    this.worldState.survivalState.kills += 1;
+    this.waveDirector?.onEnemyDeath();
+  }
+
+  /**
+   * Restart flow: validate status === 'ENDED', generate new seed, regenerate arena, reset mode state, start match.
+   * Call from /restart or when UI sends restart_request.
+   */
+  handleRestartRequest(): boolean {
+    const surv = this.worldState.survivalState;
+    const tt = this.worldState.timeTrialState;
+    if (surv.status !== 'ENDED' && tt.status !== 'ENDED') return false;
+
+    this.worldState.matchConfig.seed =
+      this.worldState.usedSeed + ':next:' + Date.now();
+    const fresh: SurvivalState = { ...INITIAL_SURVIVAL_STATE };
+    this.worldState.survivalState = fresh;
+    this.worldState.timeTrialState = { ...INITIAL_TIME_TRIAL_STATE };
+
+    this.worldState.roundState.status = 'STARTING';
+    this.beginStartMatch();
+    return true;
+  }
+
   /** Called by tick when RESETTING delay has elapsed; kicks off async map load then match start. */
   startMatch(): void {
     this.beginStartMatch();
+  }
+
+  /** Current safe radius for Time Trial boundary (deterministic). Shrinks every 5s. */
+  getTimeTrialSafeRadius(nowMs: number): number {
+    const spec = this.worldState.mapSpec;
+    const tt = this.worldState.timeTrialState;
+    if (!spec || tt.status !== 'RUNNING') return Infinity;
+    const outer = spec.ringRadii[0] ?? 120;
+    const shrinkPer5s = 15;
+    const elapsed5s = Math.floor((nowMs - tt.startedAtMs) / 5000);
+    return Math.max(0, outer - elapsed5s * shrinkPer5s);
+  }
+
+  /** Distance from arena center (x,z). */
+  getPlayerDistanceFromCenter(pos: { x: number; z: number }): number {
+    return Math.sqrt(pos.x * pos.x + pos.z * pos.z);
+  }
+
+  /** Whether Time Trial boundary should apply damage at this time (throttled in caller). */
+  isOutsideTimeTrialSafeRadius(nowMs: number, playerPos: { x: number; z: number }): boolean {
+    const safe = this.getTimeTrialSafeRadius(nowMs);
+    const dist = this.getPlayerDistanceFromCenter(playerPos);
+    return dist > safe;
   }
 
   /* -------------------------------------------------------------------------- */
@@ -177,8 +403,15 @@ export class RoundController {
   tickMatchLifecycle(): void {
     const now = Date.now();
     const r = this.worldState.roundState;
+    const mode = this.worldState.matchConfig.mode;
 
-    if (r.status === 'RUNNING' && r.matchEndsAtMs && now >= r.matchEndsAtMs) {
+    if (
+      r.status === 'RUNNING' &&
+      r.matchEndsAtMs &&
+      now >= r.matchEndsAtMs &&
+      mode !== 'survival' &&
+      mode !== 'timetrial'
+    ) {
       this.endMatch();
     }
 
