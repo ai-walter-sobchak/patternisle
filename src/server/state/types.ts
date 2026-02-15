@@ -70,17 +70,52 @@ export interface PlayerState {
   lastFallRecoveryAtMs?: number;
 }
 
-/** Round loop state: LOBBY → RUNNING → ENDED → RESETTING → RUNNING. */
+/** Match mode selection. */
+export type MatchMode = 'AUTO' | 'SOLO' | 'MULTI';
+
+/** Solo result state when timer ends (or player reaches target). */
+export type SoloResult = 'WIN' | 'LOSE';
+
+/**
+ * Round loop state:
+ * LOBBY → STARTING → RUNNING → ENDED → RESETTING → LOBBY (or RUNNING depending on your flow).
+ *
+ * Note: Keeping your original statuses but adding STARTING for the 3s countdown.
+ */
 export interface RoundState {
   roundId: number;
-  status: 'LOBBY' | 'RUNNING' | 'ENDED' | 'RESETTING';
+  status: 'LOBBY' | 'STARTING' | 'RUNNING' | 'ENDED' | 'RESETTING';
+
+  /** Mode chosen for the current round. */
+  mode: MatchMode;
+
+  /** Winner (MULTI) or player who met win condition first (SOLO). */
   winnerPlayerId?: string;
+
+  /**
+   * Target shards for the current round.
+   * For MULTI: race to target.
+   * For SOLO: hit target before timer ends.
+   */
+  targetShards: number;
+
   /** Match duration in ms (default 180000). */
   matchDurationMs: number;
+
   /** When match timer ends (ms since epoch); set when RUNNING. */
   matchEndsAtMs?: number;
-  /** When status is ENDED, client countdown target (ms since epoch). */
+
+  /** When status is STARTING, countdown ends at this time (ms since epoch). */
+  startingEndsAtMs?: number;
+
+  /** When status is ENDED/RESETTING, client countdown target (ms since epoch). */
   resetEndsAtMs?: number;
+
+  /** SOLO: server-generated rival pace (display only). */
+  rivalShards?: number;
+
+  /** SOLO: final result for the local player is computed client-side using winner/lose semantics, but server can provide this summary. */
+  soloResult?: SoloResult;
 }
 
 /** Single spawn point in world space. */

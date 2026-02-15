@@ -3,7 +3,7 @@
  * No per-tick logic; transitions driven by setTimeout.
  */
 
-export type RoundStatus = 'WAITING' | 'RUNNING' | 'ENDED' | 'RESETTING';
+export type RoundStatus = 'LOBBY' | 'RUNNING' | 'ENDED' | 'RESETTING';
 
 export interface RoundState {
   roundId: number;
@@ -42,7 +42,7 @@ export class RoundManager {
     this.onTransition = opts.onTransition;
     this.state = {
       roundId: 0,
-      status: 'WAITING',
+      status: 'LOBBY',
       targetScore,
       seed: '',
     };

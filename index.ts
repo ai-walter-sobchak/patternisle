@@ -29,7 +29,6 @@ import {
   DefaultPlayerEntity,
   PlayerEvent,
   PlayerManager,
-  PlayerUIEvent,
   WorldLoopEvent,
 } from 'hytopia';
 
@@ -57,6 +56,7 @@ function logMapBounds(map: any) {
       }
     }
   }
+
   if (!blocks.length) {
     console.warn('[map] bounds: no blocks found');
     return;
@@ -84,21 +84,8 @@ import { CombatService } from './src/server/services/CombatService.js';
 import { ShardSystem } from './src/server/systems/ShardSystem.js';
 import { ObjectiveSystem } from './src/server/systems/ObjectiveSystem.js';
 import { SpawnSystem } from './src/server/systems/SpawnSystem.js';
-import {
-  RoundController,
-  TARGET_SHARDS,
-} from './src/server/systems/RoundController.js';
+import { RoundController, TARGET_SHARDS } from './src/server/systems/RoundController.js';
 import { RoundManager } from './src/server/systems/RoundManager.js';
-
-/**
- * startServer is always the entry point for our game.
- * It accepts a single function where we should do any
- * setup necessary for our game. The init function is
- * passed a World instance which is the default
- * world created by the game server on startup.
- *
- * Documentation: https://github.com/hytopiagg/sdk/blob/main/docs/server.startserver.md
- */
 
 startServer(async world => {
   // WorldState: single source of truth for this match (one per server run).
@@ -107,24 +94,7 @@ startServer(async world => {
   worldState.mapData = worldMap;
   console.log('[Patternisle] matchId=%s seed=%d', worldState.matchId, worldState.seed);
 
-  const roundManager = new RoundManager({
-    targetScore: TARGET_SHARDS,
-    onTransition: (event) => {
-      if (event.type === 'started') {
-        console.log(`[Round] started id=${event.roundId} seed=${event.seed}`);
-      } else if (event.type === 'ended') {
-        const winner = event.winnerName ?? 'none';
-        console.log(`[Round] ended id=${event.roundId} winner=${winner}`);
-      } else {
-        console.log(`[Round] reset id=${event.roundId} nextStartsInMs=${event.nextStartsInMs}`);
-      }
-    },
-  });
-  const services = { roundManager };
-
   const DEV_MODE = false; // Set true to allow /setmatch while players are connected.
-
-  // world.simulation.enableDebugRendering(true);
 
   console.log('[map] json keys:', Object.keys(worldMap || {}));
   console.log('[map] json size:', JSON.stringify(worldMap || {}).length);
@@ -139,19 +109,17 @@ startServer(async world => {
 
   const hud = new HudService(world, worldState);
   const scoreService = new ScoreService(worldState);
-  const objectiveSystem = new ObjectiveSystem(
-    world,
-    worldState,
-    hud,
-    scoreService
-  );
+
+  const objectiveSystem = new ObjectiveSystem(world, worldState, hud, scoreService);
   const spawnSystem = new SpawnSystem(worldState);
+
   let roundController: RoundController;
+
   const shardSystem = new ShardSystem(world, worldState, {
-    onShardsAwarded: (playerId) =>
-      roundController?.onPlayerShardsChanged(playerId),
+    onShardsAwarded: (playerId) => roundController?.onPlayerShardsChanged(playerId),
     hud,
   });
+
   roundController = new RoundController(
     world,
     worldState,
@@ -161,6 +129,7 @@ startServer(async world => {
     hud,
     scoreService
   );
+
   const combatService = new CombatService(
     world,
     worldState,
@@ -169,34 +138,71 @@ startServer(async world => {
     scoreService
   );
 
+  // Spawn initial pickups for this match seed.
   shardSystem.generateAndSpawnPickups(worldState.seed);
-  // Match starts on first player join when status is LOBBY (see JOINED_WORLD).
+
+  // =========================================================
+  // RoundManager is the ONLY lifecycle authority (Option A)
+  // =========================================================
+  let roundManager: RoundManager;
+  const services: { roundManager?: RoundManager } = {};
+
+  // Safe wrappers so this file runs even if you haven't added the methods yet.
+  // Strongly recommended: implement RoundController.onRoundStarted/onRoundEnded/onRoundReset.
+  function rcOnRoundStarted() {
+    const rc: any = roundController as any;
+    if (typeof rc.onRoundStarted === 'function') return rc.onRoundStarted();
+    if (typeof rc.startMatch === 'function') return rc.startMatch();
+    if (typeof rc.forceStart === 'function') return rc.forceStart();
+    console.warn('[Round] RoundController has no onRoundStarted/startMatch/forceStart');
+  }
+
+  function rcOnRoundEnded(winnerName?: string) {
+    const rc: any = roundController as any;
+    if (typeof rc.onRoundEnded === 'function') return rc.onRoundEnded(winnerName);
+    if (typeof rc.endMatch === 'function') return rc.endMatch(winnerName);
+    console.warn('[Round] RoundController has no onRoundEnded/endMatch (winner=%s)', winnerName ?? 'none');
+  }
+
+  function rcOnRoundReset() {
+    const rc: any = roundController as any;
+    if (typeof rc.onRoundReset === 'function') return rc.onRoundReset();
+    if (typeof rc.resetMatch === 'function') return rc.resetMatch();
+    console.warn('[Round] RoundController has no onRoundReset/resetMatch');
+  }
+
+  roundManager = new RoundManager({
+    targetScore: TARGET_SHARDS,
+    onTransition: (event) => {
+      if (event.type === 'started') {
+        console.log(`[Round] started id=${event.roundId} seed=${event.seed}`);
+        rcOnRoundStarted();
+      } else if (event.type === 'ended') {
+        const winner = event.winnerName ?? 'none';
+        console.log(`[Round] ended id=${event.roundId} winner=${winner}`);
+        rcOnRoundEnded(event.winnerName);
+      } else {
+        console.log(`[Round] reset id=${event.roundId} nextStartsInMs=${event.nextStartsInMs}`);
+        rcOnRoundReset();
+      }
+    },
+  });
+
+  services.roundManager = roundManager;
 
   // =========================================================
   // Shared handler for JOIN + RECONNECT (keeps logic in sync)
   // =========================================================
   function handlePlayerEnteredWorld(
     player: any,
-    opts?: { allowStartMatch?: boolean; resetShardsOnEnter?: boolean }
+    opts?: { resetShardsOnEnter?: boolean }
   ) {
-    const allowStartMatch = opts?.allowStartMatch !== false;
     const resetShardsOnEnter = opts?.resetShardsOnEnter !== false;
 
     // Always ensure score entry so joiners (including late) appear on leaderboard
     scoreService.ensurePlayer(player.id, player.name ?? player.id);
 
     const status = worldState.roundState.status;
-
-    // Only JOIN is allowed to auto-start (avoid reconnect accidentally starting a match)
-    if (allowStartMatch && status === 'LOBBY') {
-      // Optional anti-double-start latch.
-      const rs: any = worldState.roundState as any;
-      if (rs.isStarting) return;
-      rs.isStarting = true;
-
-      roundController.startMatch();
-      return;
-    }
 
     // RUNNING or RESETTING: mid-match enter — init combat, (optional) reset shards, spawn, sync HUD
     if (status === 'RUNNING' || status === 'RESETTING') {
@@ -227,7 +233,6 @@ startServer(async world => {
 
   world.loop.on(WorldLoopEvent.TICK_START, ({ tickDeltaMs }) => {
     shardSystem.tick(tickDeltaMs);
-    // Match lifecycle no longer runs per-frame; see 250ms setInterval below.
   });
 
   const OBJECTIVE_RESPAWN_INTERVAL_MS = 250;
@@ -236,21 +241,26 @@ startServer(async world => {
 
   setInterval(() => {
     objectiveSystem.tickRespawn();
-    roundController.tickMatchLifecycle();
 
     // Fall recovery: respawn players who fell off the island (y < -20), with per-player cooldown
     const now = Date.now();
     const connected = PlayerManager.instance.getConnectedPlayersByWorld(world);
+
     for (const player of connected) {
       const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
       const entity = entities[0];
       if (!entity?.isSpawned || entity.position.y >= VOID_Y) continue;
+
       const ps = worldState.getPlayer(player.id);
-      if (ps?.lastFallRecoveryAtMs != null && now - ps.lastFallRecoveryAtMs < FALL_RECOVERY_COOLDOWN_MS)
-        continue;
+      if (
+        ps?.lastFallRecoveryAtMs != null &&
+        now - ps.lastFallRecoveryAtMs < FALL_RECOVERY_COOLDOWN_MS
+      ) continue;
+
       roundController.respawnPlayer(player);
       combatService.resetHealth(player.id);
       if (ps) ps.invulnerableUntilMs = Date.now() + 1500;
+
       hud.sendHud(player);
       hud.toast(player, 'info', 'Recovered');
       if (ps) ps.lastFallRecoveryAtMs = now;
@@ -263,7 +273,8 @@ startServer(async world => {
   world.on(PlayerEvent.JOINED_WORLD, ({ player }) => {
     worldState.registerPlayer(player.id);
 
-    if (services.roundManager.getState().status === 'WAITING') {
+    // Start match lifecycle on first join only (LOBBY → RUNNING)
+    if (services.roundManager?.getState().status === 'LOBBY') {
       services.roundManager.startRound();
     }
 
@@ -279,15 +290,14 @@ startServer(async world => {
     player.ui.load('ui/index.html');
     player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
 
-    // JOIN: allow start; reset shards for fairness on late-join
-    handlePlayerEnteredWorld(player, { allowStartMatch: true, resetShardsOnEnter: true });
+    // JOIN: reset shards for fairness on late-join
+    handlePlayerEnteredWorld(player, { resetShardsOnEnter: true });
 
     hud.toast(player, 'info', 'Connected');
     hud.sendRoundSplashToPlayer(player);
 
     world.chatManager.sendPlayerMessage(player, 'Patternisle connected');
 
-    // Send a nice welcome message that only the player who joined will see ;)
     world.chatManager.sendPlayerMessage(player, 'Welcome to the game!', '00FF00');
     world.chatManager.sendPlayerMessage(player, 'Use WASD to move around & space to jump.');
     world.chatManager.sendPlayerMessage(player, 'Hold shift to sprint.');
@@ -307,12 +317,11 @@ startServer(async world => {
    * Handle player reconnecting (UI reload + resync).
    */
   world.on(PlayerEvent.RECONNECTED_WORLD, ({ player }) => {
-    // Reload the player's UI to ensure it's up to date.
     player.ui.load('ui/index.html');
     player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
 
-    // RECONNECT: do NOT start match; do NOT reset shards
-    handlePlayerEnteredWorld(player, { allowStartMatch: false, resetShardsOnEnter: false });
+    // RECONNECT: do NOT reset shards
+    handlePlayerEnteredWorld(player, { resetShardsOnEnter: false });
   });
 
   /**
@@ -403,10 +412,7 @@ startServer(async world => {
 
   world.chatManager.registerCommand('/forcestart', player => {
     if (!DEV_MODE) {
-      world.chatManager.sendPlayerMessage(
-        player,
-        'Refused: /forcestart is DEV_MODE only.'
-      );
+      world.chatManager.sendPlayerMessage(player, 'Refused: /forcestart is DEV_MODE only.');
       return;
     }
     roundController.forceStart();
