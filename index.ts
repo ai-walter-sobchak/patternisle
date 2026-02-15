@@ -147,7 +147,9 @@ startServer(async world => {
   shardSystem.generateAndSpawnPickups(worldState.seed);
 
   // =========================================================
-  // RoundManager is the ONLY lifecycle authority (Option A)
+  // Round lifecycle: RoundController is the sole authority (tickMatchLifecycle).
+  // RoundManager exists for optional callbacks/logging but is NOT used for timing
+  // (no startRound() call), avoiding conflicting 120s/10s vs 180s/8s timers.
   // =========================================================
   let roundManager: RoundManager;
   const services: { roundManager?: RoundManager } = {};
@@ -317,9 +319,10 @@ startServer(async world => {
   world.on(PlayerEvent.JOINED_WORLD, ({ player }) => {
     worldState.registerPlayer(player.id);
 
-    // Start match lifecycle on first join only (LOBBY → RUNNING)
-    if (services.roundManager?.getState().status === 'LOBBY') {
-      services.roundManager.startRound();
+    // Start match lifecycle on first join only (LOBBY → RUNNING).
+    // RoundController is the sole lifecycle authority (tickMatchLifecycle); RoundManager is not used for timing.
+    if (worldState.roundState.status === 'LOBBY') {
+      roundController.forceStart();
     }
 
     const playerEntity = new DefaultPlayerEntity({
@@ -531,12 +534,20 @@ startServer(async world => {
       return;
     }
     const attackerPos = attackerEntity.position;
-    const connected = roundController.getConnectedPlayers();
+    const connectedPlayers = PlayerManager.instance.getConnectedPlayersByWorld(world);
+    const connected = connectedPlayers.map((player) => {
+      const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
+      return {
+        id: player.id,
+        name: (player as { name?: string }).name,
+        entity: entities[0],
+      };
+    });
     const q = targetQuery.toLowerCase();
     const candidates = connected.filter(
-      (c) =>
+      (c: { id: string; name?: string }) =>
         c.id !== attackerId &&
-        (c.id.toLowerCase().includes(q) || (c.name && String(c.name).toLowerCase().includes(q)))
+        (c.id.toLowerCase().includes(q) || (c.name != null && String(c.name).toLowerCase().includes(q)))
     );
     if (candidates.length === 0) {
       world.chatManager.sendPlayerMessage(player, 'No matching player.');
