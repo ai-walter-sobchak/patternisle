@@ -39,6 +39,10 @@
         </div>
 
         <div class="hud-health hidden" id="hud-health" aria-label="Health">
+          <span class="hud-health-shield hidden" id="hud-health-shield" aria-hidden="true" title="Spawn protection">🛡</span>
+          <div class="hud-health-bar">
+            <div id="hud-health-fill" class="hud-health-fill" style="width:100%"></div>
+          </div>
           <span class="hud-health-value" id="hud-health-value">100</span>
         </div>
 
@@ -167,6 +171,7 @@
           e.preventDefault();
           mobileInteractButton.classList.add('active');
           if (window.hytopia) hytopia.pressInput('ml', true);
+          if (typeof window.triggerAttack === 'function') window.triggerAttack();
         });
 
         mobileInteractButton.addEventListener('touchend', e => {

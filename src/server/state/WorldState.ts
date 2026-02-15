@@ -115,6 +115,11 @@ export class WorldState {
 
   /** Get or create player state; marks connected. */
   registerPlayer(playerId: string): PlayerState {
+    return this.ensurePlayerState(playerId, true);
+  }
+
+  /** Get or create player state. When markConnected is true, sets connected = true. */
+  ensurePlayerState(playerId: string, markConnected = false): PlayerState {
     let state = this.players.get(playerId);
     if (!state) {
       state = {
@@ -128,14 +133,31 @@ export class WorldState {
           islandsDiscovered: 0,
           hybridsCreated: 0,
         },
-        connected: true,
+        connected: markConnected,
         health: 100,
+        maxHealth: 100,
       };
       this.players.set(playerId, state);
-    } else {
+    } else if (markConnected) {
       state.connected = true;
     }
     return state;
+  }
+
+  setHealth(playerId: string, value: number): void {
+    const p = this.players.get(playerId);
+    if (p) p.health = Math.max(0, value);
+  }
+
+  getHealth(playerId: string): { health: number; maxHealth: number } | undefined {
+    const p = this.players.get(playerId);
+    if (!p) return undefined;
+    return { health: p.health, maxHealth: p.maxHealth ?? 100 };
+  }
+
+  setMaxHealth(playerId: string, value: number): void {
+    const p = this.players.get(playerId);
+    if (p) p.maxHealth = Math.max(1, value);
   }
 
   /** Mark player as disconnected (do not remove from map). */

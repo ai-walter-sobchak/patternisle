@@ -42,7 +42,7 @@ export interface HudMessage {
   /** Leaderboard (sorted by score desc, name asc). */
   scores?: HudScoreEntry[];
   /** Local player health (sent only to that player). */
-  health?: number;
+  health?: { current: number; max: number; invulnerableUntilMs?: number } | null;
   /** Ambient power-up score (sent only to that player). */
   ambientScore?: number;
   /** Active power-up effects with expiry (sent only to that player). */

@@ -30,6 +30,7 @@ import {
   DefaultPlayerEntityController,
   PlayerEvent,
   PlayerManager,
+  PlayerUIEvent,
   WorldLoopEvent,
 } from 'hytopia';
 
@@ -91,6 +92,7 @@ import { PowerUpSystem } from './src/server/systems/PowerUpSystem.js';
 import { RoundController, TARGET_SHARDS } from './src/server/systems/RoundController.js';
 import { RoundManager } from './src/server/systems/RoundManager.js';
 import { DEFAULT_MATCH_CONFIG } from './src/server/state/matchConfig.js';
+import { MELEE_DAMAGE, SPAWN_PROTECTION_MS } from './src/server/config/combat.js';
 
 startServer(async world => {
   // WorldState: single source of truth for this match (one per server run).
@@ -223,12 +225,12 @@ startServer(async world => {
     if (status === 'RUNNING' || status === 'RESETTING') {
       const ps = worldState.getPlayer(player.id);
       if (ps) {
-        ps.health = 100;
         ps.controlsLockedUntilMs = undefined;
         ps.isEliminatedUntilMs = undefined;
         ps.lastAttackAtMs = undefined;
-        ps.invulnerableUntilMs = Date.now() + 1500;
+        ps.invulnerableUntilMs = Date.now() + SPAWN_PROTECTION_MS;
       }
+      combatService.resetHealth(player.id);
 
       if (resetShardsOnEnter) {
         worldState.resetPlayerShards(player.id);
@@ -314,7 +316,7 @@ startServer(async world => {
         if (roundController.isOutsideTimeTrialSafeRadius(now, { x: pos.x, z: pos.z })) {
           if (now - lastBoundaryDamageMs >= BOUNDARY_DAMAGE_THROTTLE_MS) {
             lastBoundaryDamageMs = now;
-            combatService.damage(player.id, 'boundary', 15, 'boundary');
+            combatService.damage(player.id, 15, { kind: 'hazard' });
           }
         }
       }
@@ -341,7 +343,7 @@ startServer(async world => {
 
       roundController.respawnPlayer(player);
       combatService.resetHealth(player.id);
-      if (ps) ps.invulnerableUntilMs = Date.now() + 1500;
+      if (ps) ps.invulnerableUntilMs = Date.now() + SPAWN_PROTECTION_MS;
 
       hud.sendHud(player);
       hud.toast(player, 'info', 'Recovered');
@@ -372,6 +374,13 @@ startServer(async world => {
     // Load our game UI for this player
     player.ui.load('ui/index.html');
     player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
+
+    // Attack action from UI (e.g. mobile interact button or click)
+    player.ui.on(PlayerUIEvent.DATA, ({ data }: { data: Record<string, unknown> }) => {
+      if (data?.type === 'attack') {
+        combatService.tryMeleeAttack(player);
+      }
+    });
 
     // JOIN: reset shards for fairness on late-join
     handlePlayerEnteredWorld(player, { resetShardsOnEnter: true });
@@ -593,8 +602,6 @@ startServer(async world => {
   });
 
   const MELEE_RANGE = 3.0;
-  const MELEE_COOLDOWN_MS = 500;
-  const MELEE_DAMAGE = 34;
 
   world.chatManager.registerCommand('/hit', (player, args) => {
     const targetQuery = args[0]?.trim();
@@ -602,21 +609,11 @@ startServer(async world => {
       world.chatManager.sendPlayerMessage(player, 'Usage: /hit <targetNameOrId>');
       return;
     }
-    if (worldState.roundState.status !== 'RUNNING') {
-      world.chatManager.sendPlayerMessage(player, 'Round resetting...');
+    if (!combatService.canAttack(player.id)) {
+      world.chatManager.sendPlayerMessage(player, 'Melee on cooldown or round not running.');
       return;
     }
     const attackerId = player.id;
-    const attackerState = worldState.getPlayer(attackerId);
-    if (!attackerState) {
-      world.chatManager.sendPlayerMessage(player, 'Not registered.');
-      return;
-    }
-    const now = Date.now();
-    if ((attackerState.lastAttackAtMs ?? 0) + MELEE_COOLDOWN_MS > now) {
-      world.chatManager.sendPlayerMessage(player, 'Melee on cooldown.');
-      return;
-    }
     const attackerEntities = world.entityManager.getPlayerEntitiesByPlayer(player);
     const attackerEntity = attackerEntities[0];
     if (!attackerEntity?.isSpawned) {
@@ -625,11 +622,11 @@ startServer(async world => {
     }
     const attackerPos = attackerEntity.position;
     const connectedPlayers = PlayerManager.instance.getConnectedPlayersByWorld(world);
-    const connected = connectedPlayers.map((player) => {
-      const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
+    const connected = connectedPlayers.map((p) => {
+      const entities = world.entityManager.getPlayerEntitiesByPlayer(p);
       return {
-        id: player.id,
-        name: (player as { name?: string }).name,
+        id: p.id,
+        name: (p as { name?: string }).name,
         entity: entities[0],
       };
     });
@@ -663,8 +660,10 @@ startServer(async world => {
       );
       return;
     }
-    attackerState.lastAttackAtMs = now;
-    combatService.damage(closest.id, attackerId, MELEE_DAMAGE, 'melee');
+    combatService.damage(closest.id, MELEE_DAMAGE, { kind: 'melee', attackerId });
+    combatService.applyKnockback(closest.id, attackerId);
+    const ps = worldState.getPlayer(attackerId);
+    if (ps) ps.lastAttackAtMs = Date.now();
     world.chatManager.sendPlayerMessage(player, 'Hit!', '00FF00');
   });
 

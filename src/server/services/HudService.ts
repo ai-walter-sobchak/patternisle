@@ -39,7 +39,14 @@ export class HudService {
 
     // Single source of truth
     const shards = p?.shards ?? 0;
-    const health = p != null ? (p.health ?? 100) : undefined;
+    const healthPayload =
+      p != null
+        ? {
+            current: p.health ?? 100,
+            max: p.maxHealth ?? 100,
+            ...(p.invulnerableUntilMs != null && { invulnerableUntilMs: p.invulnerableUntilMs }),
+          }
+        : null;
 
     const msg: HudMessage = {
       v: HUD_MESSAGE_VERSION,
@@ -52,7 +59,7 @@ export class HudService {
       matchEndsAtMs: r.matchEndsAtMs,
       resetEndsAtMs: r.resetEndsAtMs ?? extras?.resetEndsAtMs,
     };
-    if (health !== undefined) msg.health = health;
+    if (healthPayload != null) msg.health = healthPayload;
     msg.ambientScore = p?.ambientScore ?? 0;
     msg.effects = (p?.effects ?? []).map(e => ({ kind: e.kind, expiresAtMs: e.expiresAtMs }));
 

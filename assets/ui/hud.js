@@ -147,15 +147,28 @@
     // Progress
     renderProgress();
 
-    // Health
-    const healthEl = document.getElementById('hud-health-value');
+    // Health (object: { current, max, invulnerableUntilMs? } or null)
     const healthWrap = document.getElementById('hud-health');
-    if (healthEl && healthWrap) {
-      if (state.health != null) {
-        healthEl.textContent = String(state.health);
+    const healthValueEl = document.getElementById('hud-health-value');
+    const healthFillEl = document.getElementById('hud-health-fill');
+    const healthShieldEl = document.getElementById('hud-health-shield');
+    if (healthWrap && healthValueEl && healthFillEl) {
+      const h = state.health;
+      if (h != null && typeof h === 'object' && 'current' in h && 'max' in h) {
+        const current = Number(h.current) || 0;
+        const max = Math.max(1, Number(h.max) || 100);
+        const pct = Math.max(0, Math.min(100, (current / max) * 100));
+        healthValueEl.textContent = String(Math.round(current));
+        healthFillEl.style.width = pct + '%';
         healthWrap.classList.remove('hidden');
+        if (healthShieldEl) {
+          const invuln = h.invulnerableUntilMs != null && Date.now() < h.invulnerableUntilMs;
+          healthShieldEl.classList.toggle('hidden', !invuln);
+          healthShieldEl.setAttribute('aria-hidden', invuln ? 'false' : 'true');
+        }
       } else {
         healthWrap.classList.add('hidden');
+        if (healthShieldEl) healthShieldEl.classList.add('hidden');
       }
     }
 
@@ -347,6 +360,7 @@
 
     const fromShards = state.shards;
     const toShards = data.shards ?? state.shards;
+    const health = data.health !== undefined ? data.health : state.health;
 
     setState({
       shards: toShards,
@@ -357,7 +371,7 @@
       matchEndsAtMs: data.matchEndsAtMs ?? state.matchEndsAtMs,
       resetEndsAtMs: data.resetEndsAtMs ?? state.resetEndsAtMs,
       scores: Array.isArray(data.scores) ? data.scores : state.scores,
-      health: data.health ?? state.health,
+      health: health,
       effects: Array.isArray(data.effects) ? data.effects : state.effects,
       ambientScore: data.ambientScore ?? state.ambientScore
     });
@@ -456,6 +470,16 @@
     });
   }
 
+  /** Call from mobile interact button (or key) to send attack action when round is RUNNING. */
+  window.triggerAttack = function () {
+    if (state.roundStatus !== 'RUNNING') return;
+    try {
+      if (window.hytopia && typeof window.hytopia.sendData === 'function') {
+        window.hytopia.sendData({ type: 'attack' });
+      }
+    } catch (_) {}
+  };
+
   function init() {
     root = document.getElementById('hud-root');
     if (!root) return;
@@ -466,6 +490,7 @@
     setInterval(function () {
       tickTimerDisplay();
       if ((state.effects || []).length > 0) renderBuffs();
+      if (state.health != null && typeof state.health === 'object') render();
     }, 250);
 
     initSettingsPanel();

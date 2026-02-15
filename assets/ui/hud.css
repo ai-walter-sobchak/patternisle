@@ -242,8 +242,9 @@
 .hud-health {
   display: flex;
   align-items: center;
-  justify-content: center;
-  min-width: 44px;
+  gap: 8px;
+  min-width: 80px;
+  max-width: 140px;
   padding: 4px 10px;
   border-radius: 999px;
   background: rgba(255,255,255,0.06);
@@ -254,6 +255,37 @@
   display: none;
 }
 
+.hud-health-shield {
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.hud-health-shield.hidden {
+  display: none;
+}
+
+.hud-health-bar {
+  flex: 1;
+  min-width: 40px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.12);
+  overflow: hidden;
+}
+
+.hud-health-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  transition: width 180ms ease;
+}
+
+.hud.reduce-motion .hud-health-fill {
+  transition: none;
+}
+
 .hud-health-value {
   font-family: system-ui, -apple-system, Segoe UI, Inter, sans-serif;
   font-weight: 800;
@@ -261,6 +293,8 @@
   line-height: 1;
   color: var(--hud-text);
   text-shadow: var(--hud-text-shadow);
+  min-width: 2em;
+  text-align: right;
 }
 
 /* ========================= */

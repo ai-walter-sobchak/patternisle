@@ -56,10 +56,14 @@ export interface PlayerState {
   controlsLockedUntilMs?: number;
   /** Combat: current health (default 100). */
   health: number;
+  /** Combat: max health (default 100). */
+  maxHealth: number;
   /** When this player was last damaged (ms since epoch). */
   lastDamagedAtMs?: number;
   /** Player who last damaged this player. */
   lastDamagedByPlayerId?: string;
+  /** Player who got the kill when this player died (for score attribution). */
+  lastKillerId?: string | null;
   /** Optional: lockout until this time (ms) after KO before respawn. */
   isEliminatedUntilMs?: number;
   /** Melee cooldown: next attack allowed at or after this time (ms since epoch). */
