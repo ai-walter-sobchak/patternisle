@@ -23,9 +23,9 @@ export interface ShardSystemConfig {
 }
 
 const DEFAULT_CONFIG: ShardSystemConfig = {
-  count: 10,
+  count: 45,
   radius: 20,
-  minSpacing: 3,
+  minSpacing: 4,
   pickupRadius: 2.5,
   scanRadius: 2.5,
 };
@@ -215,6 +215,40 @@ export class ShardSystem {
         }
       }
     }
+  }
+
+  /**
+   * Try to collect a shard at the given position for a bot. Server-authoritative.
+   * Returns true if a pickup was collected and bot state was updated.
+   */
+  tryCollectForBot(botId: string, position: { x: number; y: number; z: number }): boolean {
+    const pickupRadiusSq = this.config.pickupRadius * this.config.pickupRadius;
+    const scanRadius = this.config.scanRadius;
+
+    for (const state of this.pickups.values()) {
+      if (state.collected) continue;
+      const pickupPos = state.entity?.position ?? state.pos;
+      if (
+        Math.abs(position.x - pickupPos.x) > scanRadius ||
+        Math.abs(position.y - pickupPos.y) > scanRadius ||
+        Math.abs(position.z - pickupPos.z) > scanRadius
+      )
+        continue;
+      if (sqDist(position, pickupPos) > pickupRadiusSq) continue;
+
+      const entityToDespawn = state.entity;
+      if (entityToDespawn?.isSpawned) entityToDespawn.despawn();
+      state.collected = true;
+      state.entity = undefined;
+
+      const p = this.worldState.getPlayer(botId);
+      if (p) {
+        p.shards += state.value;
+        this.onShardsAwarded?.(botId);
+      }
+      return true;
+    }
+    return false;
   }
 
   getRemainingCount(): number {

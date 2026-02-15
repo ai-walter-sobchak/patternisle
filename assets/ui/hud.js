@@ -16,7 +16,8 @@
     scores: [],
     health: null,
     effects: [],
-    ambientScore: 0
+    ambientScore: 0,
+    mode: 'MULTI'
   };
 
   const FEED_MAX = 6;
@@ -190,7 +191,55 @@
 
     renderBuffs();
     renderScoreboard();
+    renderLobbyPanel();
     renderEndOverlay();
+  }
+
+  // =========================================================
+  // LOBBY PANEL (mode select + start)
+  // =========================================================
+
+  function renderLobbyPanel() {
+    const panel = document.getElementById('hud-lobby-panel');
+    if (!panel) return;
+
+    const isLobby = state.roundStatus === 'LOBBY';
+    panel.classList.toggle('hidden', !isLobby);
+    panel.setAttribute('aria-hidden', isLobby ? 'true' : 'false');
+
+    if (!isLobby) return;
+
+    const currentMode = state.mode || 'MULTI';
+    panel.querySelectorAll('.hud-lobby-mode').forEach(function (btn) {
+      const mode = btn.getAttribute('data-mode');
+      btn.classList.toggle('active', mode === currentMode);
+    });
+  }
+
+  function initLobbyPanel() {
+    const panel = document.getElementById('hud-lobby-panel');
+    const startBtn = document.getElementById('hud-lobby-start');
+    if (!panel || !startBtn) return;
+
+    panel.querySelectorAll('.hud-lobby-mode').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const mode = btn.getAttribute('data-mode');
+        if (!mode) return;
+        try {
+          if (window.hytopia && typeof window.hytopia.sendData === 'function') {
+            window.hytopia.sendData({ type: 'set_mode', mode: mode });
+          }
+        } catch (_) {}
+      });
+    });
+
+    startBtn.addEventListener('click', function () {
+      try {
+        if (window.hytopia && typeof window.hytopia.sendData === 'function') {
+          window.hytopia.sendData({ type: 'start_match' });
+        }
+      } catch (_) {}
+    });
   }
 
   // =========================================================
@@ -373,7 +422,8 @@
       scores: Array.isArray(data.scores) ? data.scores : state.scores,
       health: health,
       effects: Array.isArray(data.effects) ? data.effects : state.effects,
-      ambientScore: data.ambientScore ?? state.ambientScore
+      ambientScore: data.ambientScore ?? state.ambientScore,
+      mode: data.mode ?? state.mode
     });
 
     if (fromShards !== toShards) {
@@ -494,6 +544,7 @@
     }, 250);
 
     initSettingsPanel();
+    initLobbyPanel();
 
     // Defer HUD data listener until hytopia is available (UI may load before SDK injects it)
     function attachDataListener() {

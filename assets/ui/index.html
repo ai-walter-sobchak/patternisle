@@ -123,6 +123,21 @@
 
     </div>
 
+    <!-- Lobby: mode selection + Start (shown when status === LOBBY) -->
+    <div id="hud-lobby-panel" class="hud-lobby-panel hidden" aria-hidden="true">
+      <div class="hud-lobby-card hud-card">
+        <h2 class="hud-lobby-title">Lobby</h2>
+        <p class="hud-lobby-subtitle">Select game mode</p>
+        <div class="hud-lobby-modes" role="group" aria-label="Game mode">
+          <button type="button" class="hud-lobby-mode" data-mode="MULTI">Shard race (with bots)</button>
+          <button type="button" class="hud-lobby-mode" data-mode="SOLO">Solo shard race</button>
+          <button type="button" class="hud-lobby-mode" data-mode="survival">Survival</button>
+          <button type="button" class="hud-lobby-mode" data-mode="timetrial">Time trial</button>
+        </div>
+        <button type="button" class="hud-lobby-start" id="hud-lobby-start">Start game</button>
+      </div>
+    </div>
+
     <div id="hud-end-overlay" class="hud-end-overlay hidden" aria-hidden="true">
       <div class="hud-end-card" role="dialog" aria-label="Match results">
         <div class="hud-end-title">Match Over</div>

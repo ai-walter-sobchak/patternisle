@@ -1,7 +1,7 @@
 import type { MatchConfig } from '../modes/types.js';
 
 export const DEFAULT_MATCH_CONFIG: MatchConfig = {
-  mode: 'survival',
+  mode: 'MULTI', // MULTI/SOLO = shard-race with bots; survival/timetrial = no bots
   size: 250,
   seed: `match_${Date.now()}`,
   survival: {

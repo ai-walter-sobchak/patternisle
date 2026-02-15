@@ -105,25 +105,31 @@ export class HudService {
   }
 
   /**
-   * Leaderboard derived from WorldState player shards.
+   * Leaderboard derived from WorldState player shards (humans + bots).
    * Sorted by shards desc, then name asc.
    *
    * NOTE: score === shards for now.
    */
   private getLeaderboard(): Array<{ playerId: string; name: string; score: number }> {
     const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
+    const entries: Array<{ playerId: string; name: string; score: number }> = [];
 
-    return players
-      .map((pl) => {
-        const p = this.worldState.getPlayer(pl.id);
-        const name = this.getPlayerDisplayName(pl.id);
-        const score = p?.shards ?? 0;
-        return { playerId: pl.id, name, score };
-      })
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return a.name.localeCompare(b.name);
-      });
+    for (const pl of players) {
+      const p = this.worldState.getPlayer(pl.id);
+      const name = this.getPlayerDisplayName(pl.id);
+      const score = p?.shards ?? 0;
+      entries.push({ playerId: pl.id, name, score });
+    }
+    for (const [botId, displayName] of this.worldState.botDisplayNames) {
+      const p = this.worldState.getPlayer(botId);
+      if (p) {
+        entries.push({ playerId: botId, name: displayName, score: p.shards });
+      }
+    }
+    return entries.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.name.localeCompare(b.name);
+    });
   }
 
   private objectiveToPayload(obj: {
@@ -214,6 +220,8 @@ export class HudService {
   }
 
   private getPlayerDisplayName(playerId: string): string {
+    const botName = this.worldState.botDisplayNames.get(playerId);
+    if (botName) return botName;
     const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     const found = players.find((p) => p.id === playerId);
     if (

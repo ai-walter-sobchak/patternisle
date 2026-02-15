@@ -13,6 +13,7 @@ import type { ObjectiveSystem } from './ObjectiveSystem.js';
 import type { SpawnSystem } from './SpawnSystem.js';
 import type { HudService } from '../services/HudService.js';
 import type { ScoreService } from '../services/ScoreService.js';
+import type { BotManager } from './BotManager.js';
 import { TARGET_SHARDS } from '../constants.js';
 import { ARENA_BOUNDS } from '../config/arenaBounds.js';
 import { ARENA_V1_TIMED_MATCH_ONLY } from '../config/arenaMode.js';
@@ -28,7 +29,7 @@ import { INITIAL_TIME_TRIAL_STATE } from '../state/timeTrialState.js';
 export { TARGET_SHARDS };
 
 const ROUND_RESET_DELAY_MS = 8000;
-const POWERUP_SPAWN_COUNT = 12;
+const POWERUP_SPAWN_COUNT = 38;
 const OBJECTIVE_TICK_MS = 100; // 10hz
 
 /** Numeric seed for this round so shards and powerups get new positions every round. */
@@ -50,7 +51,8 @@ export class RoundController {
     private readonly objectiveSystem: ObjectiveSystem,
     private readonly spawnSystem: SpawnSystem,
     private readonly hud: HudService,
-    private readonly scoreService: ScoreService
+    private readonly scoreService: ScoreService,
+    private readonly botManager?: BotManager
   ) {}
 
   /* -------------------------------------------------------------------------- */
@@ -185,6 +187,8 @@ export class RoundController {
     }
 
     this.objectiveSystem.spawnObjectiveNow();
+
+    this.botManager?.onRoundStarted();
 
     this.hud.broadcastRoundSplash();
     this.hud.broadcastHud();
@@ -367,11 +371,13 @@ export class RoundController {
   /* MATCH END (TIMER OR OBJECTIVE)                                             */
   /* -------------------------------------------------------------------------- */
 
-  endMatch(winnerPlayerId?: string): void {
+  endMatch(winnerPlayerId?: string, winnerDisplayName?: string): void {
     const r = this.worldState.roundState;
     if (r.status !== 'RUNNING') return;
 
     const now = Date.now();
+    const winnerIsBot = winnerPlayerId != null && this.worldState.botDisplayNames.has(winnerPlayerId);
+    this.botManager?.onRoundEnded(winnerPlayerId, winnerIsBot);
 
     let winnerId = winnerPlayerId;
 
@@ -387,7 +393,10 @@ export class RoundController {
     this.hud.broadcastHud();
 
     if (winnerId) {
-      const winnerName = this.getPlayerDisplayName(winnerId);
+      const winnerName =
+        winnerDisplayName ??
+        this.worldState.botDisplayNames.get(winnerId) ??
+        this.getPlayerDisplayName(winnerId);
       this.hud.broadcastToast('good', `${winnerName} wins`);
       this.hud.broadcastFeed(`Winner: ${winnerName}`);
     } else {

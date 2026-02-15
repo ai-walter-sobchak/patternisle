@@ -91,6 +91,7 @@ import { SpawnSystem } from './src/server/systems/SpawnSystem.js';
 import { PowerUpSystem } from './src/server/systems/PowerUpSystem.js';
 import { RoundController, TARGET_SHARDS } from './src/server/systems/RoundController.js';
 import { RoundManager } from './src/server/systems/RoundManager.js';
+import { BotManager } from './src/server/systems/BotManager.js';
 import { DEFAULT_MATCH_CONFIG } from './src/server/state/matchConfig.js';
 import { MELEE_DAMAGE, SPAWN_PROTECTION_MS } from './src/server/config/combat.js';
 
@@ -137,6 +138,15 @@ startServer(async world => {
 
   const powerUpSystem = new PowerUpSystem(world, worldState, spawnSystem, hud);
 
+  const botManager = new BotManager(world, worldState, {
+    shardSystem,
+    spawnSystem,
+    hud,
+    onBotWin: (winnerBotId, winnerDisplayName) => {
+      roundController.endMatch(winnerBotId, winnerDisplayName);
+    },
+  });
+
   roundController = new RoundController(
     world,
     worldState,
@@ -145,7 +155,8 @@ startServer(async world => {
     objectiveSystem,
     spawnSystem,
     hud,
-    scoreService
+    scoreService,
+    botManager
   );
 
   const combatService = new CombatService(
@@ -357,11 +368,7 @@ startServer(async world => {
   world.on(PlayerEvent.JOINED_WORLD, ({ player }) => {
     worldState.registerPlayer(player.id);
 
-    // Start match lifecycle on first join only (LOBBY → RUNNING).
-    // RoundController is the sole lifecycle authority (tickMatchLifecycle); RoundManager is not used for timing.
-    if (worldState.roundState.status === 'LOBBY') {
-      roundController.forceStart();
-    }
+    // Lobby: do NOT auto-start. Wait for player to select mode and click Start (handled via UI DATA).
 
     const playerEntity = new DefaultPlayerEntity({
       player,
@@ -379,6 +386,23 @@ startServer(async world => {
     player.ui.on(PlayerUIEvent.DATA, ({ data }: { data: Record<string, unknown> }) => {
       if (data?.type === 'attack') {
         combatService.tryMeleeAttack(player);
+        return;
+      }
+      // Lobby: mode selection and start (only when round is in LOBBY)
+      if (worldState.roundState.status === 'LOBBY') {
+        if (data?.type === 'set_mode' && typeof data.mode === 'string') {
+          const mode = data.mode as import('./src/server/modes/types.js').GameMode;
+          const allowed: import('./src/server/modes/types.js').GameMode[] = ['MULTI', 'SOLO', 'survival', 'timetrial'];
+          if (allowed.includes(mode)) {
+            worldState.matchConfig.mode = mode;
+            hud.broadcastHud();
+          }
+          return;
+        }
+        if (data?.type === 'start_match') {
+          roundController.forceStart();
+          return;
+        }
       }
     });
 

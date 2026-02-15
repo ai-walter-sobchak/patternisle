@@ -91,10 +91,13 @@ export class WorldState {
   /** Power-up spawns and pacing; managed by power-up system. */
   powerUps: PowerUpState = {
     spawnsById: {},
-    maxActive: 10,
+    maxActive: 28,
     respawnMinMs: 4000,
     respawnMaxMs: 9000,
   };
+
+  /** Bot id -> display name for HUD/leaderboard and winner announcement. Set by BotManager. */
+  botDisplayNames: Map<string, string> = new Map();
 
   constructor(matchId: string) {
     this.matchId = matchId;
