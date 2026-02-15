@@ -41,6 +41,10 @@ export interface HudMessage {
   scores?: HudScoreEntry[];
   /** Local player health (sent only to that player). */
   health?: number;
+  /** Ambient power-up score (sent only to that player). */
+  ambientScore?: number;
+  /** Active power-up effects with expiry (sent only to that player). */
+  effects?: Array<{ kind: string; expiresAtMs: number }>;
 }
 
 export interface ToastMessage {

@@ -68,6 +68,10 @@ export interface PlayerState {
   invulnerableUntilMs?: number;
   /** Fall recovery: last time we recovered this player from void (ms since epoch); 2s cooldown. */
   lastFallRecoveryAtMs?: number;
+  /** Ambient power-ups currently active on the player. */
+  effects?: ActiveEffect[];
+  /** Ambient pickup score (separate from shards). */
+  ambientScore?: number;
 }
 
 /** Match mode selection. */
@@ -129,3 +133,41 @@ export type SpawnState = {
 
 /** Map data (e.g. from assets/map.json) for floor-aware spawn generation. blocks keyed by "x,y,z". */
 export type MapData = { blocks?: Record<string, unknown> };
+
+export type PowerUpKind =
+  | 'SPEED'
+  | 'JUMP'
+  | 'SHIELD'
+  | 'MAGNET'
+  | 'DOUBLE_AMBIENT'
+  | 'HEAL';
+
+export type PowerUpSpawn = {
+  id: string;
+  kind: PowerUpKind;
+  position: { x: number; y: number; z: number };
+  /** Entity id if you spawn a visible world entity; optional for now. */
+  entityId?: string;
+  /** When it can respawn (ms since epoch). */
+  respawnAtMs?: number;
+  /** True if currently available to pick up. */
+  isActive: boolean;
+};
+
+export type ActiveEffect = {
+  kind: PowerUpKind;
+  /** When the effect expires (ms since epoch). */
+  expiresAtMs: number;
+  /** Stack count for effects that can stack (optional). */
+  stacks?: number;
+};
+
+export type PowerUpState = {
+  spawnsById: Record<string, PowerUpSpawn>;
+  /** Soft cap and pacing knobs */
+  maxActive: number;
+  respawnMinMs: number;
+  respawnMaxMs: number;
+  /** Last tick time for throttling */
+  lastTickAtMs?: number;
+};

@@ -11,11 +11,12 @@
     target: 25,
     winnerName: null,
     matchEndsAtMs: null,
-    resetEndsAtMs: null,
     feed: [],
     toasts: [],
     scores: [],
-    health: null
+    health: null,
+    effects: [],
+    ambientScore: 0
   };
 
   const FEED_MAX = 6;
@@ -174,8 +175,43 @@
       else roundStatusEl.classList.add('hidden');
     }
 
+    renderBuffs();
     renderScoreboard();
     renderEndOverlay();
+  }
+
+  // =========================================================
+  // POWER-UP BUFFS
+  // =========================================================
+
+  function formatEffectRemaining(expiresAtMs) {
+    const remaining = Math.max(0, expiresAtMs - Date.now());
+    const secs = Math.ceil(remaining / 1000);
+    return secs + 's';
+  }
+
+  function renderBuffs() {
+    const wrap = document.getElementById('hud-buffs');
+    if (!wrap) return;
+
+    const effects = state.effects || [];
+    if (effects.length === 0) {
+      wrap.innerHTML = '';
+      wrap.classList.add('hidden');
+      return;
+    }
+
+    wrap.classList.remove('hidden');
+    wrap.innerHTML = '';
+    effects.forEach(function (e) {
+      const kind = (e.kind || '').replace(/_/g, ' ');
+      const remaining = formatEffectRemaining(e.expiresAtMs || 0);
+      const pill = document.createElement('span');
+      pill.className = 'hud-buff-pill';
+      pill.setAttribute('aria-label', kind + ', ' + remaining + ' left');
+      pill.textContent = kind + ' ' + remaining;
+      wrap.appendChild(pill);
+    });
   }
 
   // =========================================================
@@ -321,7 +357,9 @@
       matchEndsAtMs: data.matchEndsAtMs ?? state.matchEndsAtMs,
       resetEndsAtMs: data.resetEndsAtMs ?? state.resetEndsAtMs,
       scores: Array.isArray(data.scores) ? data.scores : state.scores,
-      health: data.health ?? state.health
+      health: data.health ?? state.health,
+      effects: Array.isArray(data.effects) ? data.effects : state.effects,
+      ambientScore: data.ambientScore ?? state.ambientScore
     });
 
     if (fromShards !== toShards) {
@@ -425,7 +463,10 @@
     applySettings(getSettings());
     render();
     tickTimerDisplay();
-    setInterval(tickTimerDisplay, 250);
+    setInterval(function () {
+      tickTimerDisplay();
+      if ((state.effects || []).length > 0) renderBuffs();
+    }, 250);
 
     initSettingsPanel();
 

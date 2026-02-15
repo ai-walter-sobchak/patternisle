@@ -7,6 +7,7 @@ import type {
   MapData,
   ObjectiveState,
   PlayerState,
+  PowerUpState,
   RoundState,
   ScoreState,
   SpawnState,
@@ -57,6 +58,14 @@ export class WorldState {
   /** Per-match scores; managed by ScoreService. Supports join mid-round. */
   score: ScoreState = {
     scoresByPlayerId: {},
+  };
+
+  /** Power-up spawns and pacing; managed by power-up system. */
+  powerUps: PowerUpState = {
+    spawnsById: {},
+    maxActive: 10,
+    respawnMinMs: 4000,
+    respawnMaxMs: 9000,
   };
 
   constructor(matchId: string) {

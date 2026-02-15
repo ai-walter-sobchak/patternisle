@@ -27,6 +27,7 @@ import {
   startServer,
   Audio,
   DefaultPlayerEntity,
+  DefaultPlayerEntityController,
   PlayerEvent,
   PlayerManager,
   WorldLoopEvent,
@@ -84,6 +85,7 @@ import { CombatService } from './src/server/services/CombatService.js';
 import { ShardSystem } from './src/server/systems/ShardSystem.js';
 import { ObjectiveSystem } from './src/server/systems/ObjectiveSystem.js';
 import { SpawnSystem } from './src/server/systems/SpawnSystem.js';
+import { PowerUpSystem } from './src/server/systems/PowerUpSystem.js';
 import { RoundController, TARGET_SHARDS } from './src/server/systems/RoundController.js';
 import { RoundManager } from './src/server/systems/RoundManager.js';
 
@@ -137,6 +139,9 @@ startServer(async world => {
     hud,
     scoreService
   );
+
+  const powerUpSystem = new PowerUpSystem(world, worldState, spawnSystem, hud);
+  powerUpSystem.seedInitialSpawns(12);
 
   // Spawn initial pickups for this match seed.
   shardSystem.generateAndSpawnPickups(worldState.seed);
@@ -230,9 +235,48 @@ startServer(async world => {
   }
 
   // =========================================================
+  // One authoritative tick: match lifecycle, power-ups, proximity pickups
+  // =========================================================
+
+  const BASE_RUN_VELOCITY = 8;
+  const BASE_JUMP_VELOCITY = 10;
+  const SPEED_BOOST_MULT = 1.5;
+  const JUMP_BOOST_MULT = 1.4;
+
+  function applyMovementEffects() {
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(world);
+    for (const player of players) {
+      const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
+      const entity = entities[0];
+      if (!entity?.isSpawned || !entity.controller) continue;
+      const ctrl = entity.controller;
+      if (!(ctrl instanceof DefaultPlayerEntityController)) continue;
+      const ps = worldState.getPlayer(player.id);
+      const effects = ps?.effects ?? [];
+      const hasSpeed = effects.some((e: { kind: string }) => e.kind === 'SPEED');
+      const hasJump = effects.some((e: { kind: string }) => e.kind === 'JUMP');
+      const movement = ctrl as { runVelocity: number; jumpVelocity: number };
+      movement.runVelocity = hasSpeed
+        ? BASE_RUN_VELOCITY * SPEED_BOOST_MULT
+        : BASE_RUN_VELOCITY;
+      movement.jumpVelocity = hasJump
+        ? BASE_JUMP_VELOCITY * JUMP_BOOST_MULT
+        : BASE_JUMP_VELOCITY;
+    }
+  }
 
   world.loop.on(WorldLoopEvent.TICK_START, ({ tickDeltaMs }) => {
     shardSystem.tick(tickDeltaMs);
+    roundController.tickMatchLifecycle();
+    powerUpSystem.tick();
+
+    // Proximity pickup checks (PowerUpSystem throttles internally)
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(world);
+    for (const p of players) {
+      powerUpSystem.tryPickup(p);
+    }
+
+    applyMovementEffects();
   });
 
   const OBJECTIVE_RESPAWN_INTERVAL_MS = 250;

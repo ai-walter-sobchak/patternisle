@@ -52,6 +52,8 @@ export class HudService {
       resetEndsAtMs: r.resetEndsAtMs ?? extras?.resetEndsAtMs,
     };
     if (health !== undefined) msg.health = health;
+    msg.ambientScore = p?.ambientScore ?? 0;
+    msg.effects = (p?.effects ?? []).map(e => ({ kind: e.kind, expiresAtMs: e.expiresAtMs }));
 
     if (r.winnerPlayerId != null) {
       // Winner display name from score store if present, else live player display name, else id.
