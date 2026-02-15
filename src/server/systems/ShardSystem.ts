@@ -120,6 +120,19 @@ export class ShardSystem {
   }
 
   /**
+   * Reset shards for a new match: clear state, rebuild placements with optional seed, spawn entities.
+   * Call from RoundController.startMatch() so every round (e.g. Round 2) has shards again.
+   */
+  resetForNewMatch(seed?: number): void {
+    this.clearPickups();
+    this.spawned = false;
+    const usedSeed = seed ?? this.worldState.seed;
+    this.generateAndSpawnPickups(usedSeed);
+    const remaining = this.getRemainingCount();
+    console.log('[shards] resetForNewMatch', { seed: usedSeed, remaining });
+  }
+
+  /**
    * Regenerate and spawn pickups (clears existing). For DEV_MODE only.
    * Despawns any existing entities, clears the map, resets spawned flag so repeated calls do not leak entities.
    */

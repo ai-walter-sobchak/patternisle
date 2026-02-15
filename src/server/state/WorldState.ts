@@ -3,7 +3,14 @@
  * Match identity and deterministic seed are set once per match (session); no persistence.
  */
 
-import type { PlayerState, RoundState } from './types.js';
+import type {
+  MapData,
+  ObjectiveState,
+  PlayerState,
+  RoundState,
+  ScoreState,
+  SpawnState,
+} from './types.js';
 
 /** Salt used when deriving seed from matchId. Changing this changes all derived seeds. */
 const SEED_SALT = 'patternisle-match-v1';
@@ -31,7 +38,25 @@ export class WorldState {
   /** Round loop state; managed by RoundController. */
   roundState: RoundState = {
     roundId: 0,
-    status: 'RUNNING',
+    status: 'LOBBY',
+    matchDurationMs: 180000,
+  };
+
+  /** Current arena objective (Golden Apple); null when none. */
+  objective: ObjectiveState | null = null;
+
+  /** Map data for floor-aware spawns; set from index after load (optional). */
+  mapData: MapData | null = null;
+
+  /** Spawn points and last-used index per player; managed by SpawnSystem. */
+  spawn: SpawnState = {
+    spawnPoints: [],
+    lastSpawnIndexByPlayerId: {},
+  };
+
+  /** Per-match scores; managed by ScoreService. Supports join mid-round. */
+  score: ScoreState = {
+    scoresByPlayerId: {},
   };
 
   constructor(matchId: string) {
@@ -58,6 +83,7 @@ export class WorldState {
       state = {
         playerId,
         shards: 0,
+        objectivePoints: 0,
         unlockedTechniques: [],
         fragments: [],
         stats: {

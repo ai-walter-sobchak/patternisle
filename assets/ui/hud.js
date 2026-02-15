@@ -7,15 +7,15 @@
   const state = {
     shards: 0,
     roundId: 1,
-    roundStatus: 'RUNNING',
+    roundStatus: 'LOBBY',
     target: 25,
     winnerName: null,
+    matchEndsAtMs: null,
     resetEndsAtMs: null,
-    countdownActive: false,
-    countdownSeconds: 0,
     feed: [],
     toasts: [],
-    splashText: null
+    splashText: null,
+    scores: []
   };
 
   const FEED_MAX = 6;
@@ -24,7 +24,7 @@
   const STREAK_WINDOW_MS = 2000;
   const HUD_SETTINGS_KEY = 'patternisle-hud-settings';
 
-  let countdownIntervalId = null;
+  let timerTickIntervalId = null;
   let root = null;
   let lastPickupTime = 0;
   let streakCount = 0;
@@ -101,22 +101,90 @@
       }
     }
 
-    const countdownWrap = root.querySelector('.hud-countdown-wrap');
-    const countdownEl = root.querySelector('.hud-countdown');
-    if (countdownWrap && countdownEl) {
-      if (state.countdownActive) {
-        countdownEl.classList.remove('hidden');
-        countdownEl.textContent = state.countdownSeconds + 's';
-      } else {
-        countdownEl.classList.add('hidden');
-      }
-    }
-
     const feedContainer = root.querySelector('.hud-feed');
     if (feedContainer && state.feed.length > FEED_MAX) {
       state.feed = state.feed.slice(-FEED_MAX);
       renderFeed(feedContainer);
     }
+
+    renderScoreboard();
+    renderEndOverlay();
+  }
+
+  function renderEndOverlay() {
+    const overlay = document.getElementById('hud-end-overlay');
+    const winnerEl = document.getElementById('hud-end-winner');
+    const listEl = document.getElementById('hud-end-leaderboard');
+    const countdownEl = document.getElementById('hud-end-countdown');
+
+    if (!overlay || !winnerEl || !listEl) return;
+
+    if (state.roundStatus === 'RESETTING') {
+      overlay.classList.remove('hidden');
+      overlay.setAttribute('aria-hidden', 'false');
+
+      winnerEl.textContent = state.winnerName
+        ? 'Winner: ' + state.winnerName
+        : 'Winner: —';
+
+      listEl.innerHTML = '';
+      if (Array.isArray(state.scores)) {
+        state.scores.slice(0, 5).forEach(function (entry) {
+          const li = document.createElement('li');
+          li.textContent = (entry.name != null ? entry.name : '—') + ' — ' + (typeof entry.score === 'number' ? entry.score : 0);
+          listEl.appendChild(li);
+        });
+      }
+
+      if (countdownEl && state.resetEndsAtMs != null) {
+        var remaining = Math.max(0, state.resetEndsAtMs - Date.now());
+        countdownEl.textContent = 'Next round in ' + (formatRemainingMs(remaining) || '0:00');
+      } else if (countdownEl) {
+        countdownEl.textContent = '';
+      }
+    } else {
+      overlay.classList.add('hidden');
+      overlay.setAttribute('aria-hidden', 'true');
+      if (countdownEl) countdownEl.textContent = '';
+    }
+  }
+
+  function getLocalPlayerId() {
+    try {
+      if (typeof window.hytopia !== 'undefined' && window.hytopia != null && typeof window.hytopia.playerId === 'string') {
+        return window.hytopia.playerId;
+      }
+    } catch (_) { /* ignore */ }
+    return null;
+  }
+
+  function renderScoreboard() {
+    const listEl = root && document.getElementById('hud-scoreboard-list');
+    if (!listEl) return;
+
+    const scores = state.scores || [];
+    const localPlayerId = getLocalPlayerId();
+
+    listEl.innerHTML = '';
+
+    if (scores.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'hud-scoreboard__empty';
+      empty.textContent = 'Waiting for players…';
+      listEl.appendChild(empty);
+      return;
+    }
+
+    scores.forEach(function (entry) {
+      const li = document.createElement('li');
+      const name = entry.name != null ? String(entry.name) : '—';
+      const score = typeof entry.score === 'number' ? entry.score : 0;
+      li.textContent = name + ' — ' + score;
+      if (localPlayerId != null && entry.playerId === localPlayerId) {
+        li.classList.add('hud-scoreboard__player--you');
+      }
+      listEl.appendChild(li);
+    });
   }
 
   function renderFeed(container) {
@@ -194,39 +262,55 @@
     }, 1200);
   }
 
-  /** Client-side countdown from server-provided end timestamp (ms since epoch). */
-  function runCountdownFromEndMs(endMs) {
-    if (countdownIntervalId) clearInterval(countdownIntervalId);
-    function update() {
-      const now = Date.now();
-      const secs = Math.max(0, Math.ceil((endMs - now) / 1000));
-      state.countdownActive = secs > 0;
-      state.countdownSeconds = secs;
-      const countdownEl = root && root.querySelector('.hud-countdown');
-      if (countdownEl) {
-        if (secs > 0) {
-          countdownEl.classList.remove('hidden');
-          countdownEl.textContent = secs + 's';
-        } else {
-          countdownEl.classList.add('hidden');
-        }
-      }
-      if (secs <= 0) {
-        clearInterval(countdownIntervalId);
-        countdownIntervalId = null;
-      }
-    }
-    update();
-    countdownIntervalId = setInterval(update, 1000);
+  /** Format remaining ms as mm:ss. Returns null if no countdown. */
+  function formatRemainingMs(remainingMs) {
+    if (remainingMs == null || remainingMs <= 0) return null;
+    const totalSecs = Math.floor(remainingMs / 1000);
+    const m = Math.floor(totalSecs / 60);
+    const s = totalSecs % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
   }
 
-  function stopCountdown() {
-    if (countdownIntervalId) {
-      clearInterval(countdownIntervalId);
-      countdownIntervalId = null;
+  /** Update only timer DOM elements from current state. No full render. */
+  function tickTimerDisplay() {
+    const badgeEl = document.getElementById('hud-status-badge');
+    const textEl = document.getElementById('hud-timer-text');
+    if (!badgeEl || !textEl) return;
+
+    const status = (state.roundStatus || 'LOBBY').toUpperCase();
+    badgeEl.textContent = status === 'RUNNING' ? 'RUNNING' : status === 'RESETTING' ? 'RESETTING' : 'LOBBY';
+    badgeEl.className = 'hud-status-badge';
+    if (status === 'RUNNING') badgeEl.classList.add('is-running');
+    else if (status === 'RESETTING') badgeEl.classList.add('is-resetting');
+    else badgeEl.classList.add('is-lobby');
+
+    let remaining = null;
+    if (status === 'RUNNING' && state.matchEndsAtMs != null) {
+      remaining = Math.max(0, state.matchEndsAtMs - Date.now());
+    } else if (status === 'RESETTING' && state.resetEndsAtMs != null) {
+      remaining = Math.max(0, state.resetEndsAtMs - Date.now());
     }
-    state.countdownActive = false;
-    render();
+    const formatted = formatRemainingMs(remaining);
+    textEl.textContent = formatted != null ? formatted : '--:--';
+
+    var endCountdownEl = document.getElementById('hud-end-countdown');
+    if (endCountdownEl && state.roundStatus === 'RESETTING' && state.resetEndsAtMs != null) {
+      var remainingEnd = Math.max(0, state.resetEndsAtMs - Date.now());
+      endCountdownEl.textContent = 'Next round in ' + (formatRemainingMs(remainingEnd) || '0:00');
+    }
+  }
+
+  function startTimerTick() {
+    if (timerTickIntervalId) return;
+    tickTimerDisplay();
+    timerTickIntervalId = setInterval(tickTimerDisplay, 250);
+  }
+
+  function stopTimerTick() {
+    if (timerTickIntervalId) {
+      clearInterval(timerTickIntervalId);
+      timerTickIntervalId = null;
+    }
   }
 
   function applyHudData(data) {
@@ -234,16 +318,20 @@
     const fromShards = state.shards;
     const toShards = typeof data.shards === 'number' ? data.shards : state.shards;
     const roundId = typeof data.roundId === 'number' ? data.roundId : state.roundId;
-    const status = data.status || state.roundStatus;
+    const roundStatus = data.roundStatus != null ? data.roundStatus : (data.status != null ? data.status : state.roundStatus);
     const target = typeof data.target === 'number' ? data.target : state.target;
+    const matchEndsAtMs = data.matchEndsAtMs !== undefined ? data.matchEndsAtMs : state.matchEndsAtMs;
+    const resetEndsAtMs = data.resetEndsAtMs !== undefined ? data.resetEndsAtMs : state.resetEndsAtMs;
 
     setState({
       shards: toShards,
       roundId: roundId,
-      roundStatus: status,
+      roundStatus: roundStatus,
       target: target,
       winnerName: data.winnerName !== undefined ? data.winnerName : state.winnerName,
-      resetEndsAtMs: data.resetEndsAtMs !== undefined ? data.resetEndsAtMs : null
+      matchEndsAtMs: matchEndsAtMs,
+      resetEndsAtMs: resetEndsAtMs,
+      scores: Array.isArray(data.scores) ? data.scores : state.scores
     });
 
     if (fromShards !== toShards) {
@@ -273,12 +361,6 @@
         shardsBox.offsetHeight;
         shardsBox.classList.add('pulse');
       }
-    }
-
-    if (data.resetEndsAtMs != null && data.resetEndsAtMs > Date.now()) {
-      runCountdownFromEndMs(data.resetEndsAtMs);
-    } else {
-      stopCountdown();
     }
 
     var banner = root && root.querySelector('.hud-round');
@@ -354,6 +436,7 @@
     if (!root) return;
     applySettings(getSettings());
     render();
+    startTimerTick();
     initSettingsPanel();
 
     hytopia.onData(function (data) {

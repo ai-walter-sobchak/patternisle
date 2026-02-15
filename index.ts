@@ -34,8 +34,53 @@ import {
 
 import worldMap from './assets/map.json';
 import { WorldState } from './src/server/state/WorldState.js';
+
+function logMapBounds(map: any) {
+  // Support array of blocks or object keyed by "x,y,z"
+  const raw = map?.blocks;
+  const blocks: { x: number; y: number; z: number }[] = [];
+  if (Array.isArray(raw)) {
+    for (const b of raw) {
+      const x = typeof b.x === 'number' ? b.x : b.position?.x;
+      const y = typeof b.y === 'number' ? b.y : b.position?.y;
+      const z = typeof b.z === 'number' ? b.z : b.position?.z;
+      if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') {
+        blocks.push({ x, y, z });
+      }
+    }
+  } else if (raw && typeof raw === 'object') {
+    for (const key of Object.keys(raw)) {
+      const parts = key.split(',').map(Number);
+      if (parts.length === 3 && parts.every(n => !Number.isNaN(n))) {
+        blocks.push({ x: parts[0], y: parts[1], z: parts[2] });
+      }
+    }
+  }
+  if (!blocks.length) {
+    console.warn('[map] bounds: no blocks found');
+    return;
+  }
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (const { x, y, z } of blocks) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+
+  console.log('[map] bounds', { minX, maxX, minY, maxY, minZ, maxZ, count: blocks.length });
+}
+
+logMapBounds(worldMap);
 import { HudService } from './src/server/services/HudService.js';
+import { ScoreService } from './src/server/services/ScoreService.js';
 import { ShardSystem } from './src/server/systems/ShardSystem.js';
+import { ObjectiveSystem } from './src/server/systems/ObjectiveSystem.js';
+import { SpawnSystem } from './src/server/systems/SpawnSystem.js';
 import {
   RoundController,
   TARGET_SHARDS,
@@ -51,10 +96,11 @@ import {
  * Documentation: https://github.com/hytopiagg/sdk/blob/main/docs/server.startserver.md
  */
 
-startServer(world => {
+startServer(async world => {
   // WorldState: single source of truth for this match (one per server run).
   const matchId = `match-${world.id}-${Date.now()}`;
   const worldState = new WorldState(matchId);
+  worldState.mapData = worldMap;
   console.log('[Patternisle] matchId=%s seed=%d', worldState.matchId, worldState.seed);
 
   const DEV_MODE = false; // Set true to allow /setmatch while players are connected.
@@ -78,22 +124,54 @@ startServer(world => {
    * After building, hit export and drop the .json file in
    * the assets folder as map.json.
    */
-  world.loadMap(worldMap);
+  console.log('[map] json keys:', Object.keys(worldMap || {}));
+  console.log('[map] json size:', JSON.stringify(worldMap || {}).length);
+
+  try {
+    console.log('[map] loading assets/map.json...');
+    await world.loadMap(worldMap);
+    console.log('[map] loadMap() complete');
+  } catch (err) {
+    console.error('[map] loadMap() FAILED', err);
+  }
 
   const hud = new HudService(world, worldState);
+  const scoreService = new ScoreService(worldState);
+  const objectiveSystem = new ObjectiveSystem(
+    world,
+    worldState,
+    hud,
+    scoreService
+  );
+  const spawnSystem = new SpawnSystem(worldState);
   let roundController: RoundController;
   const shardSystem = new ShardSystem(world, worldState, {
     onShardsAwarded: (playerId) =>
       roundController?.onPlayerShardsChanged(playerId),
     hud,
   });
-  roundController = new RoundController(world, worldState, shardSystem, hud);
+  roundController = new RoundController(
+    world,
+    worldState,
+    shardSystem,
+    objectiveSystem,
+    spawnSystem,
+    hud,
+    scoreService
+  );
   shardSystem.generateAndSpawnPickups(worldState.seed);
-  roundController.startRound();
+  // Match starts on first player join when status is LOBBY (see JOINED_WORLD).
 
   world.loop.on(WorldLoopEvent.TICK_START, ({ tickDeltaMs }) => {
     shardSystem.tick(tickDeltaMs);
+    // Match lifecycle no longer runs per-frame; see 250ms setInterval below.
   });
+
+  const OBJECTIVE_RESPAWN_INTERVAL_MS = 250;
+  setInterval(() => {
+    objectiveSystem.tickRespawn();
+    roundController.tickMatchLifecycle();
+  }, OBJECTIVE_RESPAWN_INTERVAL_MS);
 
   /**
    * Handle player joining the game. The PlayerEvent.JOINED_WORLD
@@ -114,14 +192,25 @@ startServer(world => {
       player,
       name: 'Player',
     });
-  
-    playerEntity.spawn(world, { x: 0, y: 10, z: 0 });
+
+    const spawnPos = roundController.getSpawnPositionForNewPlayer(player.id);
+    playerEntity.spawn(world, spawnPos);
 
     // Load our game UI for this player
     player.ui.load('ui/index.html');
     player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
 
-    hud.sendHud(player);
+    const playerName =
+      player && 'name' in player && typeof (player as { name?: string }).name === 'string'
+        ? (player as { name: string }).name
+        : player.id;
+    scoreService.ensurePlayer(player.id, playerName);
+    if (worldState.roundState.status === 'LOBBY') {
+      roundController.startMatch();
+    } else {
+      hud.sendHud(player);
+    }
+
     hud.toast(player, 'info', 'Connected');
     hud.sendRoundSplashToPlayer(player);
 
@@ -227,6 +316,27 @@ startServer(world => {
     );
   });
 
+  world.chatManager.registerCommand('/claim', player => {
+    const playerState = worldState.getPlayer(player.id);
+    if (playerState?.controlsLockedUntilMs != null && Date.now() < playerState.controlsLockedUntilMs) {
+      world.chatManager.sendPlayerMessage(player, 'Round resetting...');
+      return;
+    }
+    if (worldState.roundState.status !== 'RUNNING') {
+      world.chatManager.sendPlayerMessage(player, 'Round resetting...');
+      return;
+    }
+    const claimed = objectiveSystem.tryClaim(player);
+    if (claimed) {
+      world.chatManager.sendPlayerMessage(player, 'Golden Apple claimed!', '00FF00');
+    } else {
+      world.chatManager.sendPlayerMessage(
+        player,
+        'Cannot claim: get within range of the Golden Apple and try again.'
+      );
+    }
+  });
+
   world.chatManager.registerCommand('/round', player => {
     const r = worldState.roundState;
     const winner = r.winnerPlayerId ?? 'none';
@@ -255,6 +365,24 @@ startServer(world => {
     }
     shardSystem.regeneratePickups(worldState.seed);
     world.chatManager.sendPlayerMessage(player, `Regenerated ${shardSystem.pickups.size} shard pickups.`);
+  });
+
+  world.chatManager.registerCommand('/where', player => {
+    if (!DEV_MODE) {
+      world.chatManager.sendPlayerMessage(player, 'Refused: /where is DEV_MODE only.');
+      return;
+    }
+    const entities = world.entityManager.getPlayerEntitiesByPlayer(player);
+    const entity = entities[0];
+    if (!entity?.isSpawned) {
+      world.chatManager.sendPlayerMessage(player, 'Not spawned.');
+      return;
+    }
+    const p = entity.position;
+    world.chatManager.sendPlayerMessage(
+      player,
+      `Position: x=${p.x.toFixed(2)} y=${p.y.toFixed(2)} z=${p.z.toFixed(2)}`
+    );
   });
 
   /**

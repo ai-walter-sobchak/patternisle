@@ -9,6 +9,7 @@ import type { WorldState } from '../state/WorldState.js';
 import {
   HUD_MESSAGE_VERSION,
   type HudMessage,
+  type HudObjectivePayload,
   type ToastMessage,
   type FeedMessage,
   type RoundSplashMessage,
@@ -40,23 +41,73 @@ export class HudService {
       roundId: r.roundId,
       status: r.status,
       target: TARGET_SHARDS,
+      roundStatus: r.status,
+      matchEndsAtMs: r.matchEndsAtMs,
+      resetEndsAtMs: r.resetEndsAtMs ?? extras?.resetEndsAtMs,
     };
+
     if (r.winnerPlayerId != null) {
+      // Winner display name from score store if present, else live player display name, else id.
+      const entry = this.worldState.score.scoresByPlayerId[r.winnerPlayerId];
       msg.winnerName =
-        extras?.winnerName ?? this.getPlayerDisplayName(r.winnerPlayerId);
+        extras?.winnerName ??
+        entry?.name ??
+        this.getPlayerDisplayName(r.winnerPlayerId);
     }
-    if (r.resetEndsAtMs != null || extras?.resetEndsAtMs != null) {
-      msg.resetEndsAtMs = extras?.resetEndsAtMs ?? r.resetEndsAtMs;
+
+    const obj = this.worldState.objective;
+    if (obj != null) {
+      msg.objective = this.objectiveToPayload(obj);
+    }
+
+    // Leaderboard based on current shards (matches the HUD shards counter)
+    const leaderboard = this.getLeaderboard();
+    if (leaderboard.length > 0) {
+      msg.scores = leaderboard;
     }
 
     player.ui.sendData(msg);
   }
 
+  /**
+   * Leaderboard from live player shards (authoritative for current round),
+   * sorted by score desc, then name asc.
+   *
+   * NOTE: score === shards for now.
+   */
+  private getLeaderboard(): Array<{ playerId: string; name: string; score: number }> {
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
+
+    return players
+      .map((pl) => {
+        const p = this.worldState.getPlayer(pl.id);
+        const name = this.getPlayerDisplayName(pl.id);
+        const score = p?.shards ?? 0;
+        return { playerId: pl.id, name, score };
+      })
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.name.localeCompare(b.name);
+      });
+  }
+
+  private objectiveToPayload(obj: {
+    kind: 'GOLDEN_APPLE';
+    isActive: boolean;
+    position: { x: number; y: number; z: number };
+    respawnAtMs?: number;
+  }): HudObjectivePayload {
+    return {
+      kind: obj.kind,
+      isActive: obj.isActive,
+      position: { ...obj.position },
+      respawnAtMs: obj.respawnAtMs,
+    };
+  }
+
   /** Send current HUD state to all connected players. */
   broadcastHud(extras?: HudExtras): void {
-    const players = PlayerManager.instance.getConnectedPlayersByWorld(
-      this.world
-    );
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     for (const player of players) {
       const p = this.worldState.getPlayer(player.id);
       const playerExtras: HudExtras | undefined =
@@ -75,19 +126,14 @@ export class HudService {
     player.ui.sendData(msg);
   }
 
-  broadcastToast(
-    kind: 'good' | 'info' | 'bad',
-    message: string
-  ): void {
+  broadcastToast(kind: 'good' | 'info' | 'bad', message: string): void {
     const msg: ToastMessage = {
       v: HUD_MESSAGE_VERSION,
       type: 'toast',
       kind,
       message,
     };
-    const players = PlayerManager.instance.getConnectedPlayersByWorld(
-      this.world
-    );
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     for (const player of players) {
       player.ui.sendData(msg);
     }
@@ -108,9 +154,7 @@ export class HudService {
       type: 'feed',
       message,
     };
-    const players = PlayerManager.instance.getConnectedPlayersByWorld(
-      this.world
-    );
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     for (const player of players) {
       player.ui.sendData(msg);
     }
@@ -131,18 +175,14 @@ export class HudService {
       type: 'roundSplash',
       roundId: this.worldState.roundState.roundId,
     };
-    const players = PlayerManager.instance.getConnectedPlayersByWorld(
-      this.world
-    );
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     for (const player of players) {
       player.ui.sendData(msg);
     }
   }
 
   private getPlayerDisplayName(playerId: string): string {
-    const players = PlayerManager.instance.getConnectedPlayersByWorld(
-      this.world
-    );
+    const players = PlayerManager.instance.getConnectedPlayersByWorld(this.world);
     const found = players.find((p) => p.id === playerId);
     if (
       found &&

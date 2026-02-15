@@ -32,10 +32,11 @@
         </div>
       </div>
 
-      <!-- Right: Countdown + Settings -->
+      <!-- Right: Match timer + Settings -->
       <div class="hud-top-right">
-        <div class="hud-countdown-wrap">
-          <div class="hud-countdown hidden" id="hud-countdown">0s</div>
+        <div class="hud-timer" aria-label="Match timer">
+          <div id="hud-status-badge" class="hud-status-badge">LOBBY</div>
+          <div id="hud-timer-text" class="hud-timer-text">--:--</div>
         </div>
 
         <button
@@ -47,6 +48,12 @@
         </button>
       </div>
 
+    </div>
+
+    <!-- Scoreboard (top-right, below top row) -->
+    <div class="hud-scoreboard">
+      <div class="hud-scoreboard__title">Leaderboard</div>
+      <ol id="hud-scoreboard-list" class="hud-scoreboard__list"></ol>
     </div>
 
     <!-- Feed + Toasts -->
@@ -89,6 +96,15 @@
         </button>
       </div>
 
+    </div>
+
+    <div id="hud-end-overlay" class="hud-end-overlay hidden" aria-hidden="true">
+      <div class="hud-end-card" role="dialog" aria-label="Match results">
+        <div class="hud-end-title">Match Over</div>
+        <div id="hud-end-winner" class="hud-end-winner"></div>
+        <ol id="hud-end-leaderboard" class="hud-end-leaderboard"></ol>
+        <div id="hud-end-countdown" class="hud-end-countdown"></div>
+      </div>
     </div>
 
   </div>

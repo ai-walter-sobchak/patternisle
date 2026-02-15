@@ -5,7 +5,22 @@
 
 export const HUD_MESSAGE_VERSION = 1;
 
-export type HudRoundStatus = 'RUNNING' | 'ENDED' | 'RESETTING';
+export type HudRoundStatus = 'LOBBY' | 'RUNNING' | 'ENDED' | 'RESETTING';
+
+/** Objective snippet for HUD (Golden Apple). */
+export interface HudObjectivePayload {
+  kind: 'GOLDEN_APPLE';
+  isActive: boolean;
+  position: { x: number; y: number; z: number };
+  respawnAtMs?: number;
+}
+
+/** Leaderboard entry sent to UI (name + score). */
+export interface HudScoreEntry {
+  playerId: string;
+  name: string;
+  score: number;
+}
 
 export interface HudMessage {
   v: typeof HUD_MESSAGE_VERSION;
@@ -14,8 +29,16 @@ export interface HudMessage {
   roundId: number;
   status: HudRoundStatus;
   target: number;
-  winnerName?: string;
+  /** Round phase for countdown UI. */
+  roundStatus?: HudRoundStatus;
+  /** When match timer ends (ms since epoch). */
+  matchEndsAtMs?: number;
+  /** When reset countdown ends (ms since epoch). */
   resetEndsAtMs?: number;
+  winnerName?: string;
+  objective?: HudObjectivePayload;
+  /** Leaderboard (sorted by score desc, name asc). */
+  scores?: HudScoreEntry[];
 }
 
 export interface ToastMessage {

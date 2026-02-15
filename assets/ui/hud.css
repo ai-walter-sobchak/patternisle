@@ -170,7 +170,7 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Top-right: Countdown + settings */
+/* Top-right: Match timer + settings */
 .hud-top-right {
   display: flex;
   align-items: flex-start;
@@ -178,35 +178,69 @@
   flex-shrink: 0;
 }
 
-.hud-countdown-wrap {
-  min-width: 80px;
+/* Timer widget: glass panel, compact; does not overlap scoreboard (top: 64px) or gear */
+.hud-timer {
   display: flex;
-  justify-content: flex-end;
-  align-items: flex-start;
-}
-
-.hud-countdown {
-  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 2px;
   background: var(--hud-panel-bg);
   backdrop-filter: var(--hud-glass);
   -webkit-backdrop-filter: var(--hud-glass);
   border-radius: 10px;
-  padding: 8px 16px;
+  padding: 6px 12px 8px;
   border: 1px solid var(--hud-panel-border);
-  font-family: 'Inter', system-ui, monospace;
-  font-weight: 700;
-  font-size: 18px;
-  color: #fcd34d;
-  text-shadow: var(--hud-text-shadow);
-  min-width: 56px;
+  box-shadow: var(--hud-panel-shadow);
+  min-width: 72px;
 }
 
-.hud-countdown.hidden {
-  visibility: hidden;
-  opacity: 0;
-  transition: visibility 0.2s, opacity 0.2s;
+.hud-status-badge {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--hud-text);
+  text-shadow: var(--hud-text-shadow);
+  line-height: 1.2;
+}
+
+.hud-status-badge.is-lobby {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.hud-status-badge.is-running {
+  color: #6ee7b7;
+}
+
+.hud-status-badge.is-resetting {
+  color: #93c5fd;
+}
+
+.hud-timer-text {
+  font-family: 'Inter', system-ui, ui-monospace, 'SF Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1.2;
+  color: var(--hud-text);
+  text-shadow: var(--hud-text-shadow);
+  -webkit-text-stroke: var(--hud-text-stroke);
+  min-height: 1.2em;
+}
+
+/* Mobile-first: readable at 320px, no collision with scoreboard */
+@media (max-width: 400px) {
+  .hud-timer {
+    min-width: 64px;
+    padding: 4px 8px 6px;
+  }
+  .hud-status-badge {
+    font-size: 9px;
+  }
+  .hud-timer-text {
+    font-size: 16px;
+  }
 }
 
 /* ----- Center: Round splash ----- */
@@ -243,6 +277,104 @@
   30%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   75%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* ----- Top-right: Scoreboard (glass panel) ----- */
+.hud-scoreboard {
+  position: absolute;
+  top: 64px;
+  right: 16px;
+  min-width: 160px;
+  max-width: min(220px, calc(100vw - 32px));
+  padding: 10px 14px 12px;
+  background: var(--hud-panel-bg);
+  backdrop-filter: var(--hud-glass);
+  -webkit-backdrop-filter: var(--hud-glass);
+  border: 1px solid var(--hud-panel-border);
+  border-radius: 12px;
+  box-shadow: var(--hud-panel-shadow);
+  z-index: 1001;
+}
+
+.hud-scoreboard__title {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--hud-text);
+  text-shadow: var(--hud-text-shadow);
+  margin-bottom: 8px;
+  padding: 0 2px;
+}
+
+.hud-scoreboard__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: scoreboard-rank;
+}
+
+.hud-scoreboard__list li {
+  counter-increment: scoreboard-rank;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--hud-text);
+  text-shadow: var(--hud-text-shadow);
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  min-height: 44px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+}
+
+.hud-scoreboard__list li:last-child {
+  margin-bottom: 0;
+}
+
+.hud-scoreboard__list li::before {
+  content: counter(scoreboard-rank) ".";
+  font-weight: 700;
+  margin-right: 8px;
+  min-width: 1.4em;
+  color: var(--hud-accent-strong);
+}
+
+.hud-scoreboard__list li.hud-scoreboard__player--you {
+  background: rgba(167, 139, 250, 0.2);
+  border-color: var(--hud-accent);
+  box-shadow: 0 0 12px var(--hud-accent-glow);
+}
+
+.hud-scoreboard__list li.hud-scoreboard__empty {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
+  justify-content: center;
+}
+
+.hud-scoreboard__list li.hud-scoreboard__empty::before {
+  display: none;
+}
+
+/* Mobile-first: default show top 3 rows */
+.hud-scoreboard__list li:nth-child(n + 4) {
+  display: none;
+}
+
+/* >= 768px: show top 5 rows */
+@media (min-width: 768px) {
+  .hud-scoreboard__list li:nth-child(n + 4) {
+    display: flex;
+  }
+  .hud-scoreboard__list li:nth-child(n + 6) {
+    display: none;
+  }
 }
 
 /* ----- Bottom-left: Event feed ----- */
@@ -635,13 +767,7 @@
   transform: rotate(10deg);
 }
 
-/* Countdown */
-
-.hud-countdown {
-  font-size: 12px;
-  font-weight: 600;
-  opacity: 0.9;
-}
+/* Timer (see .hud-timer above) */
 
 /* Feed + Toast spacing fix */
 
@@ -651,4 +777,54 @@
 
 .hud-toast-stack {
   margin-top: 10px;
+}
+
+/* ----- End-of-round overlay ----- */
+.hud-end-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.hud-end-overlay.hidden {
+  display: none;
+}
+
+.hud-end-card {
+  background: var(--hud-panel-bg);
+  backdrop-filter: var(--hud-glass);
+  border: 1px solid var(--hud-panel-border);
+  border-radius: 16px;
+  padding: 24px;
+  width: min(92vw, 460px);
+  box-shadow: var(--hud-panel-shadow);
+  text-align: center;
+  color: var(--hud-text);
+  text-shadow: var(--hud-text-shadow);
+}
+
+.hud-end-title {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.hud-end-winner {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.hud-end-leaderboard {
+  margin: 0 0 16px 0;
+  padding-left: 1.5rem;
+  text-align: left;
+}
+
+.hud-end-countdown {
+  font-size: 14px;
+  opacity: 0.85;
 }
