@@ -3,7 +3,7 @@
  * Match identity and deterministic seed are set once per match (session); no persistence.
  */
 
-import type { PlayerState } from './types.js';
+import type { PlayerState, RoundState } from './types.js';
 
 /** Salt used when deriving seed from matchId. Changing this changes all derived seeds. */
 const SEED_SALT = 'patternisle-match-v1';
@@ -28,6 +28,11 @@ export class WorldState {
   matchId: string;
   seed: number;
   readonly players: Map<string, PlayerState> = new Map();
+  /** Round loop state; managed by RoundController. */
+  roundState: RoundState = {
+    roundId: 0,
+    status: 'RUNNING',
+  };
 
   constructor(matchId: string) {
     this.matchId = matchId;
@@ -77,5 +82,12 @@ export class WorldState {
 
   getPlayer(playerId: string): PlayerState | undefined {
     return this.players.get(playerId);
+  }
+
+  /** Set every player's shard balance to 0 (round reset). Does not remove players. */
+  resetAllPlayerShards(): void {
+    for (const p of this.players.values()) {
+      p.shards = 0;
+    }
   }
 }

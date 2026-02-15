@@ -26,3 +26,10 @@ export interface PlayerState {
   /** True while player is in the world; false after LEFT_WORLD. */
   connected: boolean;
 }
+
+/** Round loop state: RUNNING → ENDED → RESETTING → RUNNING. */
+export interface RoundState {
+  roundId: number;
+  status: 'RUNNING' | 'ENDED' | 'RESETTING';
+  winnerPlayerId?: string;
+}

@@ -34,6 +34,10 @@ import {
 import worldMap from './assets/map.json';
 import { WorldState } from './src/server/state/WorldState.js';
 import { ShardSystem } from './src/server/systems/ShardSystem.js';
+import {
+  RoundController,
+  TARGET_SHARDS,
+} from './src/server/systems/RoundController.js';
 
 /**
  * startServer is always the entry point for our game.
@@ -74,8 +78,14 @@ startServer(world => {
    */
   world.loadMap(worldMap);
 
-  const shardSystem = new ShardSystem(world, worldState);
+  let roundController: RoundController;
+  const shardSystem = new ShardSystem(world, worldState, {
+    onShardsAwarded: (playerId) =>
+      roundController?.onPlayerShardsChanged(playerId),
+  });
+  roundController = new RoundController(world, worldState, shardSystem);
   shardSystem.generateAndSpawnPickups(worldState.seed);
+  roundController.startRound();
 
   world.loop.on(WorldLoopEvent.TICK_START, ({ tickDeltaMs }) => {
     shardSystem.tick(tickDeltaMs);
@@ -107,6 +117,11 @@ startServer(world => {
     player.ui.load('ui/index.html');
 
     world.chatManager.sendPlayerMessage(player, 'Patternisle connected');
+
+    roundController.sendRoundBannerToPlayer(player);
+
+    // ✅ Send the round banner to the joining player (so they never miss "Round started")
+  roundController.sendRoundBannerToPlayer(playerEntity);
 
     // Send a nice welcome message that only the player who joined will see ;)
     world.chatManager.sendPlayerMessage(player, 'Welcome to the game!', '00FF00');
@@ -204,6 +219,27 @@ startServer(world => {
       player,
       `Shards: ${total} (you). Remaining pickups: ${remaining}`
     );
+  });
+
+  world.chatManager.registerCommand('/round', player => {
+    const r = worldState.roundState;
+    const winner = r.winnerPlayerId ?? 'none';
+    world.chatManager.sendPlayerMessage(
+      player,
+      `roundId=${r.roundId} status=${r.status} target=${TARGET_SHARDS} winner=${winner}`
+    );
+  });
+
+  world.chatManager.registerCommand('/forcestart', player => {
+    if (!DEV_MODE) {
+      world.chatManager.sendPlayerMessage(
+        player,
+        'Refused: /forcestart is DEV_MODE only.'
+      );
+      return;
+    }
+    roundController.forceStart();
+    world.chatManager.sendPlayerMessage(player, 'Round force-started.');
   });
 
   world.chatManager.registerCommand('/spawnshards', player => {

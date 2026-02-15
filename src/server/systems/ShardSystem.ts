@@ -37,15 +37,24 @@ function sqDist(
   return dx * dx + dy * dy + dz * dz;
 }
 
+export interface ShardSystemOptions {
+  /** Called when a player collects shards (after WorldState is updated). */
+  onShardsAwarded?: (playerId: string) => void;
+}
+
 export class ShardSystem {
   readonly pickups: Map<string, ShardPickupState> = new Map();
   readonly config: ShardSystemConfig = { ...DEFAULT_CONFIG };
   private spawned = false;
+  private readonly onShardsAwarded?: (playerId: string) => void;
 
   constructor(
     private readonly world: World,
-    private readonly worldState: WorldState
-  ) {}
+    private readonly worldState: WorldState,
+    options: ShardSystemOptions = {}
+  ) {
+    this.onShardsAwarded = options.onShardsAwarded;
+  }
 
   /**
    * Generate positions from seed and spawn pickup entities once per match.
@@ -164,6 +173,7 @@ export class ShardSystem {
             `+${state.value} shards (total ${total})`,
             '00FF00'
           );
+          this.onShardsAwarded?.(player.id);
         }
       }
     }
