@@ -88,6 +88,7 @@ import {
   RoundController,
   TARGET_SHARDS,
 } from './src/server/systems/RoundController.js';
+import { RoundManager } from './src/server/systems/RoundManager.js';
 
 /**
  * startServer is always the entry point for our game.
@@ -105,6 +106,21 @@ startServer(async world => {
   const worldState = new WorldState(matchId);
   worldState.mapData = worldMap;
   console.log('[Patternisle] matchId=%s seed=%d', worldState.matchId, worldState.seed);
+
+  const roundManager = new RoundManager({
+    targetScore: TARGET_SHARDS,
+    onTransition: (event) => {
+      if (event.type === 'started') {
+        console.log(`[Round] started id=${event.roundId} seed=${event.seed}`);
+      } else if (event.type === 'ended') {
+        const winner = event.winnerName ?? 'none';
+        console.log(`[Round] ended id=${event.roundId} winner=${winner}`);
+      } else {
+        console.log(`[Round] reset id=${event.roundId} nextStartsInMs=${event.nextStartsInMs}`);
+      }
+    },
+  });
+  const services = { roundManager };
 
   const DEV_MODE = false; // Set true to allow /setmatch while players are connected.
 
@@ -246,6 +262,10 @@ startServer(async world => {
    */
   world.on(PlayerEvent.JOINED_WORLD, ({ player }) => {
     worldState.registerPlayer(player.id);
+
+    if (services.roundManager.getState().status === 'WAITING') {
+      services.roundManager.startRound();
+    }
 
     const playerEntity = new DefaultPlayerEntity({
       player,
