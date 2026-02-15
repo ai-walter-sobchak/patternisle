@@ -28,6 +28,7 @@ import {
   Audio,
   DefaultPlayerEntity,
   PlayerEvent,
+  PlayerUIEvent,
   WorldLoopEvent,
 } from 'hytopia';
 
@@ -115,6 +116,7 @@ startServer(world => {
 
     // Load our game UI for this player
     player.ui.load('ui/index.html');
+    player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
 
     world.chatManager.sendPlayerMessage(player, 'Patternisle connected');
 
@@ -162,6 +164,7 @@ startServer(world => {
   world.on(PlayerEvent.RECONNECTED_WORLD, ({ player }) => {
     // Reload the player's UI to ensure it's up to date.
     player.ui.load('ui/index.html');
+    player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
   });
 
   /**

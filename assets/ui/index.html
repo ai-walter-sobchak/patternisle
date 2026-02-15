@@ -3,6 +3,17 @@ This is a basic boilerplate example of how to implement simple game UI,
 and also configure additional buttons for mobile compatibility.
 -->
 
+<div id="ping-debug" class="ping-debug"></div>
+
+<script>
+  hytopia.onData((data) => {
+    if (data?.type === 'ping') {
+      const el = document.getElementById('ping-debug');
+      if (el) el.textContent = 'PING OK ' + (data.ts ?? '');
+    }
+  });
+</script>
+
 <script>
   // Handle interact button touch / untouch
   const mobileInteractButton = document.getElementById('mobile-interact-button');
@@ -53,6 +64,17 @@ and also configure additional buttons for mobile compatibility.
 </div>
 
 <style>
+  .ping-debug {
+    position: fixed;
+    top: 4px;
+    left: 4px;
+    font-size: 10px;
+    font-family: monospace;
+    color: rgba(0, 255, 0, 0.9);
+    pointer-events: none;
+    z-index: 9999;
+  }
+
   /* By default, we hide the mobile controls */
   .mobile-controls {
     display: none;
