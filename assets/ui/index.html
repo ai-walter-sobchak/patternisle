@@ -1,148 +1,212 @@
-<!--
-  Game UI: HUD (shards, round, countdown, feed, toasts) + mobile controls.
-  Simulator: T = shard award, R = cycle round status.
--->
-<link rel="stylesheet" href="hud.css" />
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Game UI</title>
 
-<div id="hud-root" class="hud">
-  <div class="hud-top">
-    <div class="hud-shards">
-      <span class="hud-shards-icon" aria-hidden="true">◆</span>
-      <span class="hud-shards-value">0</span>
-    </div>
-    <div class="hud-round-wrap">
-      <div class="hud-round">
-        <span class="hud-round-num">Round 1</span>
-        <span class="hud-round-status running">RUNNING</span>
+  <!-- HUD Styles -->
+  <link rel="stylesheet" href="{{CDN_ASSETS_URL}}/ui/hud.css" />
+</head>
+
+<body>
+
+  <!-- ============================= -->
+  <!-- HUD ROOT -->
+  <!-- ============================= -->
+
+  <div id="hud-root" class="hud">
+
+    <div class="hud-top">
+
+      <!-- Left: Shards -->
+      <div class="hud-shards" id="hud-shards">
+        <span class="hud-shards-icon" aria-hidden="true">◆</span>
+        <span class="hud-shards-value" id="hud-shards-value">0</span>
       </div>
+
+      <!-- Center: Round -->
+      <div class="hud-round-wrap">
+        <div class="hud-round">
+          <span class="hud-round-num" id="hud-round-num">Round 1</span>
+          <span class="hud-round-status running" id="hud-round-status">RUNNING</span>
+        </div>
+      </div>
+
+      <!-- Right: Countdown + Settings -->
+      <div class="hud-top-right">
+        <div class="hud-countdown-wrap">
+          <div class="hud-countdown hidden" id="hud-countdown">0s</div>
+        </div>
+
+        <button
+          type="button"
+          class="hud-settings-btn"
+          aria-label="HUD settings"
+          title="HUD settings">
+          ⚙
+        </button>
+      </div>
+
     </div>
-    <div class="hud-countdown-wrap">
-      <div class="hud-countdown hidden">0s</div>
+
+    <!-- Feed + Toasts -->
+    <div class="hud-feed"></div>
+    <div class="hud-toast-stack"></div>
+
+    <!-- Settings Panel -->
+    <div class="hud-settings-panel" id="hud-settings-panel" aria-hidden="true">
+
+      <h3>HUD Settings</h3>
+
+      <div class="hud-settings-row">
+        <label>Scale</label>
+        <div class="hud-settings-scale" role="group" aria-label="HUD scale">
+          <button type="button" data-scale="0.8">0.8</button>
+          <button type="button" data-scale="1">1.0</button>
+          <button type="button" data-scale="1.2">1.2</button>
+        </div>
+      </div>
+
+      <div class="hud-settings-row">
+        <label for="hud-reduce-motion">Reduce motion</label>
+        <button
+          type="button"
+          class="hud-settings-toggle"
+          id="hud-reduce-motion"
+          role="switch"
+          aria-checked="false">
+        </button>
+      </div>
+
+      <div class="hud-settings-row">
+        <label for="hud-mute-sounds">Mute UI sounds</label>
+        <button
+          type="button"
+          class="hud-settings-toggle"
+          id="hud-mute-sounds"
+          role="switch"
+          aria-checked="false">
+        </button>
+      </div>
+
     </div>
+
   </div>
-  <div class="hud-feed"></div>
-  <div class="hud-toast-stack"></div>
-</div>
 
-<div id="ping-debug" class="ping-debug"></div>
+  <!-- ============================= -->
+  <!-- Ping Debug -->
+  <!-- ============================= -->
 
-<script>
-  hytopia.onData((data) => {
-    if (data?.type === 'ping') {
-      const el = document.getElementById('ping-debug');
-      if (el) el.textContent = 'PING OK ' + (data.ts ?? '');
+  <div id="ping-debug" class="ping-debug"></div>
+
+  <!-- ============================= -->
+  <!-- Mobile Controls -->
+  <!-- ============================= -->
+
+  <div class="mobile-controls">
+    <a id="mobile-interact-button" class="mobile-button">
+      <img src="{{CDN_ASSETS_URL}}/icons/target.png" />
+    </a>
+
+    <a id="mobile-jump-button" class="mobile-button">
+      <img src="{{CDN_ASSETS_URL}}/icons/jump.png" />
+    </a>
+  </div>
+
+  <!-- ============================= -->
+  <!-- Scripts -->
+  <!-- ============================= -->
+
+  <script src="{{CDN_ASSETS_URL}}/ui/hud.js"></script>
+
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+
+      const mobileInteractButton = document.getElementById('mobile-interact-button');
+      const mobileJumpButton = document.getElementById('mobile-jump-button');
+
+      if (mobileInteractButton) {
+        mobileInteractButton.addEventListener('touchstart', e => {
+          e.preventDefault();
+          mobileInteractButton.classList.add('active');
+          if (window.hytopia) hytopia.pressInput('ml', true);
+        });
+
+        mobileInteractButton.addEventListener('touchend', e => {
+          e.preventDefault();
+          mobileInteractButton.classList.remove('active');
+          if (window.hytopia) hytopia.pressInput('ml', false);
+        });
+      }
+
+      if (mobileJumpButton) {
+        mobileJumpButton.addEventListener('touchstart', e => {
+          e.preventDefault();
+          mobileJumpButton.classList.add('active');
+          if (window.hytopia) hytopia.pressInput(' ', true);
+        });
+
+        mobileJumpButton.addEventListener('touchend', e => {
+          e.preventDefault();
+          mobileJumpButton.classList.remove('active');
+          if (window.hytopia) hytopia.pressInput(' ', false);
+        });
+      }
+
+    });
+  </script>
+
+  <!-- ============================= -->
+  <!-- Styles -->
+  <!-- ============================= -->
+
+  <style>
+    .ping-debug {
+      position: fixed;
+      top: 4px;
+      left: 4px;
+      font-size: 10px;
+      font-family: monospace;
+      color: rgba(0, 255, 0, 0.9);
+      pointer-events: none;
+      z-index: 9999;
     }
-  });
-</script>
 
-<script src="hud.js"></script>
+    .mobile-controls {
+      display: none;
+    }
 
-<script>
-  // Handle interact button touch / untouch
-  const mobileInteractButton = document.getElementById('mobile-interact-button');
-  mobileInteractButton.addEventListener('touchstart', e => {
-    e.preventDefault(); // Prevents mobile highlight/select/copy popup behaviors
-    mobileInteractButton.classList.add('active'); // more immediate feedback to add/remove active class
-    hytopia.pressInput('ml', true);
-  });
+    body.mobile .mobile-controls {
+      display: flex;
+      gap: 14px;
+      position: fixed;
+      bottom: 40px;
+      right: 40px;
+    }
 
-  mobileInteractButton.addEventListener('touchend', e => {
-    e.preventDefault();
-    mobileInteractButton.classList.remove('active');
-    hytopia.pressInput('ml', false);
-  });
+    .mobile-button {
+      background-color: rgba(0, 0, 0, 0.5);
+      border-radius: 50%;
+      align-items: center;
+      justify-content: center;
+      display: flex;
+      width: 50px;
+      height: 50px;
+      transition: all 0.15s ease;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      pointer-events: auto !important;
+    }
 
-  // Handle jump button touch / untouch
-  const mobileJumpButton = document.getElementById('mobile-jump-button');
-  mobileJumpButton.addEventListener('touchstart', e => {
-    e.preventDefault();
-    mobileJumpButton.classList.add('active');
-    hytopia.pressInput(' ', true);
-  });
+    .mobile-button img {
+      width: 22px;
+      height: 22px;
+    }
 
-  mobileJumpButton.addEventListener('touchend', e => {
-    e.preventDefault();
-    mobileJumpButton.classList.remove('active');
-    hytopia.pressInput(' ', false);
-  });
-</script>
+    .mobile-button.active {
+      transform: scale(0.92);
+      background-color: rgba(0, 0, 0, 0.75);
+    }
+  </style>
 
-<!--
-  HYTOPIA allows you to build completely custom UI using HTML, CSS and Javascript.
-  You can build simple UIs, to highly complex ones. UI capabilities are as powerful
-  as building a regular web page - there are close to no limitations on what is possible.
-
-  Remember, HYTOPIA sandboxes your UI & UI scripts, so external network requests or
-  other unsafe actions likely won't work as you expect in production.
--->
-
-<div class="mobile-controls">
-  <a id="mobile-interact-button" class="mobile-button">
-    <img src="{{CDN_ASSETS_URL}}/icons/target.png" />
-  </a>
-
-  <a id="mobile-jump-button" class="mobile-button">
-    <img src="{{CDN_ASSETS_URL}}/icons/jump.png" />
-  </a>
-</div>
-
-<style>
-  .ping-debug {
-    position: fixed;
-    top: 4px;
-    left: 4px;
-    font-size: 10px;
-    font-family: monospace;
-    color: rgba(0, 255, 0, 0.9);
-    pointer-events: none;
-    z-index: 9999;
-  }
-
-  /* By default, we hide the mobile controls */
-  .mobile-controls {
-    display: none;
-  }
-
-  /*
-    We can use the body.mobile class to detect if we're on a mobile device.
-    The HYTOPIA game client will always add this class to the body element when running on a mobile device.
-  */
-  body.mobile .mobile-controls { /* If this css selector matches because we're on mobile, show the mobile controls */
-    display: flex;
-    gap: 14px;
-    position: fixed;
-    bottom: 40px;
-    right: 40px;
-  }
-
-  /* You can configure and style your buttons however you'd like. This is a minimalistic starting point. */
-  .mobile-button {
-    background-color: rgba(0, 0, 0, 0.5);
-    border-radius: 50%;
-    align-items: center;
-    justify-content: center;
-    display: flex;
-    width: 50px;
-    height: 50px;
-    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-    will-change: transform, background-color;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    font-family: 'Inter', sans-serif;
-    font-size: 14px;
-    font-weight: bold;
-    color: rgba(255, 255, 255, 0.8);
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
-    pointer-events: auto !important;
-  }
-  
-  .mobile-button img {
-    width: 22px;
-    height: 22px;
-  }
-
-  .mobile-button.active {
-    transform: scale(0.92);
-    background-color: rgba(0, 0, 0, 0.75);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  }  
-</style>
+</body>
+</html>

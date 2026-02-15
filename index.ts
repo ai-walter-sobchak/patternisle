@@ -34,6 +34,7 @@ import {
 
 import worldMap from './assets/map.json';
 import { WorldState } from './src/server/state/WorldState.js';
+import { HudService } from './src/server/services/HudService.js';
 import { ShardSystem } from './src/server/systems/ShardSystem.js';
 import {
   RoundController,
@@ -79,12 +80,14 @@ startServer(world => {
    */
   world.loadMap(worldMap);
 
+  const hud = new HudService(world, worldState);
   let roundController: RoundController;
   const shardSystem = new ShardSystem(world, worldState, {
     onShardsAwarded: (playerId) =>
       roundController?.onPlayerShardsChanged(playerId),
+    hud,
   });
-  roundController = new RoundController(world, worldState, shardSystem);
+  roundController = new RoundController(world, worldState, shardSystem, hud);
   shardSystem.generateAndSpawnPickups(worldState.seed);
   roundController.startRound();
 
@@ -118,12 +121,11 @@ startServer(world => {
     player.ui.load('ui/index.html');
     player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
 
+    hud.sendHud(player);
+    hud.toast(player, 'info', 'Connected');
+    hud.sendRoundSplashToPlayer(player);
+
     world.chatManager.sendPlayerMessage(player, 'Patternisle connected');
-
-    roundController.sendRoundBannerToPlayer(player);
-
-    // ✅ Send the round banner to the joining player (so they never miss "Round started")
-  roundController.sendRoundBannerToPlayer(playerEntity);
 
     // Send a nice welcome message that only the player who joined will see ;)
     world.chatManager.sendPlayerMessage(player, 'Welcome to the game!', '00FF00');
@@ -165,6 +167,7 @@ startServer(world => {
     // Reload the player's UI to ensure it's up to date.
     player.ui.load('ui/index.html');
     player.ui.sendData({ v: 1, type: 'ping', ts: Date.now() });
+    hud.sendHud(player);
   });
 
   /**

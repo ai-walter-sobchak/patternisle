@@ -9,6 +9,7 @@ import { createDeterministicRng } from '../utils/deterministicRng.js';
 import type { ShardPickupState } from '../entities/ShardPickup.js';
 import { createShardPickupEntity } from '../entities/ShardPickup.js';
 import type { WorldState } from '../state/WorldState.js';
+import type { HudService } from '../services/HudService.js';
 
 export interface ShardSystemConfig {
   count: number;
@@ -40,6 +41,8 @@ function sqDist(
 export interface ShardSystemOptions {
   /** Called when a player collects shards (after WorldState is updated). */
   onShardsAwarded?: (playerId: string) => void;
+  /** If set, send HUD + feed (+ optional toast) on pickup. */
+  hud?: HudService;
 }
 
 export class ShardSystem {
@@ -47,6 +50,7 @@ export class ShardSystem {
   readonly config: ShardSystemConfig = { ...DEFAULT_CONFIG };
   private spawned = false;
   private readonly onShardsAwarded?: (playerId: string) => void;
+  private readonly hud?: HudService;
 
   constructor(
     private readonly world: World,
@@ -54,6 +58,7 @@ export class ShardSystem {
     options: ShardSystemOptions = {}
   ) {
     this.onShardsAwarded = options.onShardsAwarded;
+    this.hud = options.hud;
   }
 
   /**
@@ -168,6 +173,9 @@ export class ShardSystem {
         if (p) {
           p.shards += state.value;
           const total = p.shards;
+          this.hud?.sendHud(player);
+          this.hud?.feed(player, `+${state.value} shards`);
+          this.hud?.toast(player, 'good', `+${state.value} shards`);
           this.world.chatManager.sendPlayerMessage(
             player,
             `+${state.value} shards (total ${total})`,

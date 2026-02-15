@@ -7,8 +7,10 @@ import type { World, Player } from 'hytopia';
 import { PlayerManager } from 'hytopia';
 import type { WorldState } from '../state/WorldState.js';
 import type { ShardSystem } from './ShardSystem.js';
+import type { HudService } from '../services/HudService.js';
+import { TARGET_SHARDS } from '../constants.js';
 
-export const TARGET_SHARDS = 25;
+export { TARGET_SHARDS };
 const ROUND_RESET_DELAY_MS = 5000;
 
 export class RoundController {
@@ -17,14 +19,18 @@ export class RoundController {
   constructor(
     private readonly world: World,
     private readonly worldState: WorldState,
-    private readonly shardSystem: ShardSystem
+    private readonly shardSystem: ShardSystem,
+    private readonly hud: HudService
   ) {}
 
-  /** Start a new round: set RUNNING and announce. */
+  /** Start a new round: set RUNNING, broadcast HUD and roundSplash. */
   startRound(): void {
     const r = this.worldState.roundState;
     r.status = 'RUNNING';
     r.winnerPlayerId = undefined;
+    r.resetEndsAtMs = undefined;
+    this.hud.broadcastHud();
+    this.hud.broadcastRoundSplash();
     this.broadcast(`Round started. First to ${TARGET_SHARDS} shards wins.`);
   }
 
@@ -38,15 +44,18 @@ export class RoundController {
     this.endRound(playerId);
   }
 
-  /** End round with winner; broadcast and schedule reset. */
+  /** End round with winner; broadcast HUD (winnerName, resetEndsAtMs), toast, schedule reset. */
   endRound(winnerPlayerId: string): void {
     const r = this.worldState.roundState;
     if (r.status !== 'RUNNING') return;
 
     r.status = 'ENDED';
     r.winnerPlayerId = winnerPlayerId;
+    r.resetEndsAtMs = Date.now() + ROUND_RESET_DELAY_MS;
 
+    this.hud.broadcastHud();
     const winnerName = this.getPlayerDisplayName(winnerPlayerId);
+    this.hud.broadcastToast('good', `${winnerName} wins`);
     this.broadcast(`🏆 ${winnerName} wins! Resetting in 5 seconds...`);
 
     this.resetTimeoutId = setTimeout(() => {
@@ -59,6 +68,8 @@ export class RoundController {
   resetRound(): void {
     const r = this.worldState.roundState;
     r.status = 'RESETTING';
+    r.resetEndsAtMs = undefined;
+    this.hud.broadcastHud();
 
     if (this.resetTimeoutId != null) {
       clearTimeout(this.resetTimeoutId);
@@ -86,18 +97,10 @@ export class RoundController {
     this.resetRound();
   }
 
-  /** Send current round status to a specific joining player. */
+  /** Send current round HUD + splash to a joining player (call from index after hud.sendHud if desired). */
   public sendRoundBannerToPlayer(player: Player): void {
-    const rs = this.worldState.roundState;
-
-    const winner = rs.winnerPlayerId
-      ? ` winner=${this.getPlayerDisplayName(rs.winnerPlayerId)}`
-      : '';
-
-    this.world.chatManager.sendPlayerMessage(
-      player,
-      `Round ${rs.roundId} is ${rs.status}. Target=${TARGET_SHARDS}.${winner}`
-    );
+    this.hud.sendHud(player);
+    this.hud.sendRoundSplashToPlayer(player);
   }
 
   private broadcast(message: string): void {

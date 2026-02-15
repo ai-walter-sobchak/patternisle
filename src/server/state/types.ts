@@ -32,4 +32,6 @@ export interface RoundState {
   roundId: number;
   status: 'RUNNING' | 'ENDED' | 'RESETTING';
   winnerPlayerId?: string;
+  /** When status is ENDED, client countdown target (ms since epoch). */
+  resetEndsAtMs?: number;
 }

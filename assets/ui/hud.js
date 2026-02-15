@@ -1,11 +1,16 @@
 /**
- * HUD state and rendering. Simulator keys: T = shard award, R = cycle round.
+ * HUD state and rendering. Server-authoritative: state comes from hytopia.onData (type: hud, toast, feed, roundSplash).
+ * Schema v1: { type:'hud', shards, roundId, status, target, winnerName?, resetEndsAtMs? } etc.
+ * Settings (scale, reduce motion, mute UI sounds) persisted in localStorage.
  */
 (function () {
   const state = {
     shards: 0,
     roundId: 1,
-    roundStatus: 'RUNNING', // RUNNING | ENDED | RESETTING
+    roundStatus: 'RUNNING',
+    target: 25,
+    winnerName: null,
+    resetEndsAtMs: null,
     countdownActive: false,
     countdownSeconds: 0,
     feed: [],
@@ -16,9 +21,62 @@
   const FEED_MAX = 6;
   const TOAST_DURATION_MS = 3200;
   const TOAST_MAX = 5;
+  const STREAK_WINDOW_MS = 2000;
+  const HUD_SETTINGS_KEY = 'patternisle-hud-settings';
 
   let countdownIntervalId = null;
   let root = null;
+  let lastPickupTime = 0;
+  let streakCount = 0;
+
+  /** Default and persisted HUD settings. */
+  function getSettings() {
+    try {
+      const raw = localStorage.getItem(HUD_SETTINGS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          scale: [0.8, 1, 1.2].includes(Number(parsed.scale)) ? Number(parsed.scale) : 1,
+          reduceMotion: Boolean(parsed.reduceMotion),
+          muteUiSounds: Boolean(parsed.muteUiSounds)
+        };
+      }
+    } catch (_) { /* ignore */ }
+    return { scale: 1, reduceMotion: false, muteUiSounds: false };
+  }
+
+  function saveSettings(settings) {
+    try {
+      localStorage.setItem(HUD_SETTINGS_KEY, JSON.stringify(settings));
+    } catch (_) { /* ignore */ }
+  }
+
+  function applySettings(settings) {
+    if (!root) root = document.getElementById('hud-root');
+    if (!root) return;
+    const s = settings || getSettings();
+    root.style.setProperty('--hud-scale', String(s.scale));
+    root.classList.toggle('reduce-motion', s.reduceMotion);
+  }
+
+  /**
+   * Play a UI sound by id. No assets required; gracefully no-ops if file missing or muted.
+   * @param {'pickup'|'win'|'toast'} id
+   */
+  function playUiSound(id) {
+    const settings = getSettings();
+    if (settings.muteUiSounds) return;
+    const map = { pickup: 'pickup', win: 'win', toast: 'toast' };
+    const name = map[id];
+    if (!name) return;
+    try {
+      var base = typeof window.CDN_ASSETS_URL !== 'undefined' ? window.CDN_ASSETS_URL : '';
+      var url = (base ? base + '/' : '') + 'sounds/ui-' + name + '.mp3';
+      var audio = new window.Audio(url);
+      audio.volume = 0.4;
+      audio.play().catch(function () {});
+    } catch (_) { /* no-op */ }
+  }
 
   function setState(partial) {
     Object.assign(state, partial);
@@ -29,11 +87,9 @@
     if (!root) root = document.getElementById('hud-root');
     if (!root) return;
 
-    // Shards
     const shardsEl = root.querySelector('.hud-shards-value');
     if (shardsEl) shardsEl.textContent = String(state.shards);
 
-    // Round banner (slide-in is applied in cycleRound on change)
     const roundWrap = root.querySelector('.hud-round-wrap');
     if (roundWrap) {
       const roundNum = roundWrap.querySelector('.hud-round-num');
@@ -45,7 +101,6 @@
       }
     }
 
-    // Countdown visibility
     const countdownWrap = root.querySelector('.hud-countdown-wrap');
     const countdownEl = root.querySelector('.hud-countdown');
     if (countdownWrap && countdownEl) {
@@ -57,15 +112,11 @@
       }
     }
 
-    // Feed (DOM managed by pushFeed; we just trim length here if needed)
     const feedContainer = root.querySelector('.hud-feed');
     if (feedContainer && state.feed.length > FEED_MAX) {
       state.feed = state.feed.slice(-FEED_MAX);
       renderFeed(feedContainer);
     }
-
-    // Toasts are DOM-managed by pushToast
-    // Splash is DOM-managed by showSplash
   }
 
   function renderFeed(container) {
@@ -125,6 +176,7 @@
   }
 
   function showSplash(text) {
+    playUiSound('win');
     if (!root) root = document.getElementById('hud-root');
     let splash = root && root.querySelector('.hud-splash');
     if (!splash && root) {
@@ -142,69 +194,92 @@
     }, 1200);
   }
 
-  function runCountdown(seconds) {
+  /** Client-side countdown from server-provided end timestamp (ms since epoch). */
+  function runCountdownFromEndMs(endMs) {
     if (countdownIntervalId) clearInterval(countdownIntervalId);
-    state.countdownActive = true;
-    state.countdownSeconds = seconds;
-    render();
-
-    countdownIntervalId = setInterval(function () {
-      state.countdownSeconds -= 1;
+    function update() {
+      const now = Date.now();
+      const secs = Math.max(0, Math.ceil((endMs - now) / 1000));
+      state.countdownActive = secs > 0;
+      state.countdownSeconds = secs;
       const countdownEl = root && root.querySelector('.hud-countdown');
-      if (countdownEl) countdownEl.textContent = state.countdownSeconds + 's';
-      if (state.countdownSeconds <= 0) {
-        clearInterval(countdownIntervalId);
-        countdownIntervalId = null;
-        state.countdownActive = false;
-        render();
+      if (countdownEl) {
+        if (secs > 0) {
+          countdownEl.classList.remove('hidden');
+          countdownEl.textContent = secs + 's';
+        } else {
+          countdownEl.classList.add('hidden');
+        }
       }
-    }, 1000);
-  }
-
-  function simulateShardAward() {
-    const add = 1 + Math.floor(Math.random() * 5);
-    const from = state.shards;
-    const to = from + add;
-    setState({ shards: to });
-
-    const shardsEl = root && root.querySelector('.hud-shards-value');
-    if (shardsEl) {
-      shardsEl.classList.remove('glow');
-      shardsEl.offsetHeight;
-      shardsEl.classList.add('glow');
-      animateNumber(shardsEl, from, to, 400);
-    }
-
-    const shardsBox = root && root.querySelector('.hud-shards');
-    if (shardsBox) {
-      shardsBox.classList.remove('pulse');
-      shardsBox.offsetHeight;
-      shardsBox.classList.add('pulse');
-    }
-
-    pushToast('shard', '+' + add + ' shards');
-    pushFeed('Collected ' + add + ' shard' + (add === 1 ? '' : 's'));
-  }
-
-  function cycleRound() {
-    const statusOrder = ['RUNNING', 'ENDED', 'RESETTING'];
-    let idx = statusOrder.indexOf(state.roundStatus);
-    idx = (idx + 1) % statusOrder.length;
-    const nextStatus = statusOrder[idx];
-
-    if (nextStatus === 'RUNNING') {
-      state.roundId += 1;
-      showSplash('Round ' + state.roundId);
-      runCountdown(5);
-    } else if (nextStatus === 'ENDED') {
-      if (countdownIntervalId) {
+      if (secs <= 0) {
         clearInterval(countdownIntervalId);
         countdownIntervalId = null;
       }
-      state.countdownActive = false;
+    }
+    update();
+    countdownIntervalId = setInterval(update, 1000);
+  }
+
+  function stopCountdown() {
+    if (countdownIntervalId) {
+      clearInterval(countdownIntervalId);
+      countdownIntervalId = null;
+    }
+    state.countdownActive = false;
+    render();
+  }
+
+  function applyHudData(data) {
+    if (data.v !== 1 || data.type !== 'hud') return;
+    const fromShards = state.shards;
+    const toShards = typeof data.shards === 'number' ? data.shards : state.shards;
+    const roundId = typeof data.roundId === 'number' ? data.roundId : state.roundId;
+    const status = data.status || state.roundStatus;
+    const target = typeof data.target === 'number' ? data.target : state.target;
+
+    setState({
+      shards: toShards,
+      roundId: roundId,
+      roundStatus: status,
+      target: target,
+      winnerName: data.winnerName !== undefined ? data.winnerName : state.winnerName,
+      resetEndsAtMs: data.resetEndsAtMs !== undefined ? data.resetEndsAtMs : null
+    });
+
+    if (fromShards !== toShards) {
+      var now = Date.now();
+      if (now - lastPickupTime <= STREAK_WINDOW_MS) {
+        streakCount += 1;
+      } else {
+        streakCount = 1;
+      }
+      lastPickupTime = now;
+      playUiSound('pickup');
+      if (streakCount >= 2) {
+        pushToast('streak', 'STREAK x' + streakCount);
+        playUiSound('toast');
+      }
+
+      const shardsEl = root && root.querySelector('.hud-shards-value');
+      if (shardsEl) {
+        shardsEl.classList.remove('glow');
+        shardsEl.offsetHeight;
+        shardsEl.classList.add('glow');
+        animateNumber(shardsEl, fromShards, toShards, 400);
+      }
+      const shardsBox = root && root.querySelector('.hud-shards');
+      if (shardsBox) {
+        shardsBox.classList.remove('pulse');
+        shardsBox.offsetHeight;
+        shardsBox.classList.add('pulse');
+      }
     }
 
-    setState({ roundStatus: nextStatus });
+    if (data.resetEndsAtMs != null && data.resetEndsAtMs > Date.now()) {
+      runCountdownFromEndMs(data.resetEndsAtMs);
+    } else {
+      stopCountdown();
+    }
 
     var banner = root && root.querySelector('.hud-round');
     if (banner) {
@@ -212,26 +287,100 @@
       banner.offsetHeight;
       banner.classList.add('slide-in');
     }
-    pushToast('round', 'Round ' + state.roundId + ' — ' + nextStatus);
   }
 
-  function onKeyDown(e) {
-    if (e.repeat) return;
-    if (e.key === 't' || e.key === 'T') {
-      e.preventDefault();
-      simulateShardAward();
+  function initSettingsPanel() {
+    var panel = document.getElementById('hud-settings-panel');
+    var btn = root && root.querySelector('.hud-settings-btn');
+    if (!panel || !btn) return;
+
+    var settings = getSettings();
+
+    btn.addEventListener('click', function () {
+      var open = panel.getAttribute('aria-hidden') !== 'true';
+      panel.classList.toggle('open', !open);
+      panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!panel.classList.contains('open')) return;
+      if (panel.contains(e.target) || btn.contains(e.target)) return;
+      panel.classList.remove('open');
+      panel.setAttribute('aria-hidden', 'true');
+    });
+
+    root.querySelectorAll('.hud-settings-scale button').forEach(function (el) {
+      var scale = Number(el.getAttribute('data-scale'));
+      el.classList.toggle('active', settings.scale === scale);
+      el.addEventListener('click', function () {
+        settings.scale = scale;
+        saveSettings(settings);
+        applySettings(settings);
+        root.querySelectorAll('.hud-settings-scale button').forEach(function (b) {
+          b.classList.toggle('active', Number(b.getAttribute('data-scale')) === scale);
+        });
+        el.setAttribute('aria-pressed', 'true');
+      });
+    });
+
+    var reduceEl = document.getElementById('hud-reduce-motion');
+    if (reduceEl) {
+      reduceEl.classList.toggle('on', settings.reduceMotion);
+      reduceEl.setAttribute('aria-checked', settings.reduceMotion ? 'true' : 'false');
+      reduceEl.addEventListener('click', function () {
+        settings.reduceMotion = !settings.reduceMotion;
+        saveSettings(settings);
+        applySettings(settings);
+        reduceEl.classList.toggle('on', settings.reduceMotion);
+        reduceEl.setAttribute('aria-checked', settings.reduceMotion ? 'true' : 'false');
+      });
     }
-    if (e.key === 'r' || e.key === 'R') {
-      e.preventDefault();
-      cycleRound();
+
+    var muteEl = document.getElementById('hud-mute-sounds');
+    if (muteEl) {
+      muteEl.classList.toggle('on', settings.muteUiSounds);
+      muteEl.setAttribute('aria-checked', settings.muteUiSounds ? 'true' : 'false');
+      muteEl.addEventListener('click', function () {
+        settings.muteUiSounds = !settings.muteUiSounds;
+        saveSettings(settings);
+        muteEl.classList.toggle('on', settings.muteUiSounds);
+        muteEl.setAttribute('aria-checked', settings.muteUiSounds ? 'true' : 'false');
+      });
     }
   }
 
   function init() {
     root = document.getElementById('hud-root');
     if (!root) return;
+    applySettings(getSettings());
     render();
-    document.addEventListener('keydown', onKeyDown);
+    initSettingsPanel();
+
+    hytopia.onData(function (data) {
+      if (!data || typeof data.type !== 'string') return;
+      if (data.type === 'ping') {
+        const el = document.getElementById('ping-debug');
+        if (el) el.textContent = 'PING OK ' + (data.ts ?? '');
+        return;
+      }
+      if (data.type === 'hud') {
+        applyHudData(data);
+        return;
+      }
+      if (data.type === 'toast') {
+        pushToast(data.kind || 'info', data.message || '');
+        return;
+      }
+      if (data.type === 'feed') {
+        pushFeed(data.message || '');
+        return;
+      }
+      if (data.type === 'roundSplash') {
+        var roundId = typeof data.roundId === 'number' ? data.roundId : state.roundId;
+        showSplash('Round ' + roundId);
+        return;
+      }
+    });
 
     if (typeof window.HUD !== 'undefined') {
       window.HUD.setState = setState;
@@ -240,6 +389,9 @@
       window.HUD.pushToast = pushToast;
       window.HUD.pushFeed = pushFeed;
       window.HUD.showSplash = showSplash;
+      window.HUD.playUiSound = playUiSound;
+      window.HUD.getSettings = getSettings;
+      window.HUD.applySettings = applySettings;
     }
   }
 
@@ -256,4 +408,7 @@
   window.HUD.pushToast = pushToast;
   window.HUD.pushFeed = pushFeed;
   window.HUD.showSplash = showSplash;
+  window.HUD.playUiSound = playUiSound;
+  window.HUD.getSettings = getSettings;
+  window.HUD.applySettings = applySettings;
 })();
